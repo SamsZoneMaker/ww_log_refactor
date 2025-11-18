@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "log_types.h": "c",
+        "log_config.h": "c"
+    }
+}

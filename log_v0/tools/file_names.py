@@ -1,0 +1,16 @@
+file_names = [
+    "include/file_ids.h",
+    "include/log_api.h",
+    "include/log_config.h",
+    "include/log_filter.h",
+    "include/log_storage.h",
+    "include/log_types.h",
+    "modules/app/main_app.c",
+    "modules/driver/uart_driver.c",
+    "src/file_ids.c",
+    "src/log_encode.c",
+    "src/log_filter.c",
+    "src/log_storage.c",
+    "src/log_str.c",
+    "test/log_test.c",
+]
