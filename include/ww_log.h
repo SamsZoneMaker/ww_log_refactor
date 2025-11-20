@@ -74,12 +74,12 @@ U8 ww_log_is_level_enabled(WW_LOG_LEVEL_E level);
  * @brief String mode logging function
  * @param module_id Module ID
  * @param level Log level
- * @param file_id File ID
+ * @param filename Source filename (with path, will be extracted)
  * @param line Line number
  * @param fmt Format string
  */
 void ww_log_str_output(WW_LOG_MODULE_E module_id, WW_LOG_LEVEL_E level,
-                       U16 file_id, U16 line, const char *fmt, ...);
+                       const char *filename, U16 line, const char *fmt, ...);
 
 #endif /* CONFIG_WW_LOG_STR_MODE */
 
@@ -177,18 +177,18 @@ void ww_log_ram_clear(void);
 
 #elif defined(CONFIG_WW_LOG_STR_MODE)
 
-    /* STRING MODE: Printf-style logging */
+    /* STRING MODE: Printf-style logging with filename */
     #define TEST_LOG_ERR_MSG(fmt, ...) \
-        ww_log_str_output(CURRENT_MODULE_ID, WW_LOG_LEVEL_ERR, CURRENT_FILE_ID, __LINE__, fmt, ##__VA_ARGS__)
+        ww_log_str_output(CURRENT_MODULE_ID, WW_LOG_LEVEL_ERR, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
     #define TEST_LOG_WRN_MSG(fmt, ...) \
-        ww_log_str_output(CURRENT_MODULE_ID, WW_LOG_LEVEL_WRN, CURRENT_FILE_ID, __LINE__, fmt, ##__VA_ARGS__)
+        ww_log_str_output(CURRENT_MODULE_ID, WW_LOG_LEVEL_WRN, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
     #define TEST_LOG_INF_MSG(fmt, ...) \
-        ww_log_str_output(CURRENT_MODULE_ID, WW_LOG_LEVEL_INF, CURRENT_FILE_ID, __LINE__, fmt, ##__VA_ARGS__)
+        ww_log_str_output(CURRENT_MODULE_ID, WW_LOG_LEVEL_INF, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
     #define TEST_LOG_DBG_MSG(fmt, ...) \
-        ww_log_str_output(CURRENT_MODULE_ID, WW_LOG_LEVEL_DBG, CURRENT_FILE_ID, __LINE__, fmt, ##__VA_ARGS__)
+        ww_log_str_output(CURRENT_MODULE_ID, WW_LOG_LEVEL_DBG, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
 
 #elif defined(CONFIG_WW_LOG_ENCODE_MODE)
 

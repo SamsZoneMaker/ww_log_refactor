@@ -6,6 +6,7 @@
 
 #include "ww_log.h"
 #include <stdarg.h>
+#include <string.h>
 
 #ifdef CONFIG_WW_LOG_STR_MODE
 
@@ -43,15 +44,29 @@ static const char* ww_log_get_module_str(WW_LOG_MODULE_E module_id)
 }
 
 /**
+ * @brief Extract filename from full path
+ * @param path Full file path
+ * @return Pointer to filename (without path)
+ */
+static const char* ww_log_extract_filename(const char *path)
+{
+    const char *filename = strrchr(path, '/');
+    if (filename == NULL) {
+        filename = strrchr(path, '\\');  /* Windows path separator */
+    }
+    return (filename != NULL) ? (filename + 1) : path;
+}
+
+/**
  * @brief String mode logging function
  * @param module_id Module ID
  * @param level Log level
- * @param file_id File ID
+ * @param filename Source filename (with path)
  * @param line Line number
  * @param fmt Format string
  */
 void ww_log_str_output(WW_LOG_MODULE_E module_id, WW_LOG_LEVEL_E level,
-                       U16 file_id, U16 line, const char *fmt, ...)
+                       const char *filename, U16 line, const char *fmt, ...)
 {
     /* Check if module is enabled */
     if (!ww_log_is_mod_enabled(module_id)) {
@@ -64,11 +79,14 @@ void ww_log_str_output(WW_LOG_MODULE_E module_id, WW_LOG_LEVEL_E level,
     }
 
 #ifdef CONFIG_WW_LOG_OUTPUT_UART
-    /* Print log header: [LEVEL][MODULE] file_id:line - */
-    printf("[%s][%s] %d:%d - ",
+    /* Extract filename without path */
+    const char *basename = ww_log_extract_filename(filename);
+
+    /* Print log header: [LEVEL][MODULE] filename:line - */
+    printf("[%s][%s] %s:%d - ",
            ww_log_get_level_str(level),
            ww_log_get_module_str(module_id),
-           file_id,
+           basename,
            line);
 
     /* Print formatted message */

@@ -12,8 +12,8 @@
 /* ========== Log Mode Selection (Choose ONE) ========== */
 
 /* Uncomment ONE of the following modes: */
-#define CONFIG_WW_LOG_DISABLED       /* No logging output */
-// #define CONFIG_WW_LOG_STR_MODE          /* String mode (printf-style) */
+// #define CONFIG_WW_LOG_DISABLED       /* No logging output */
+#define CONFIG_WW_LOG_STR_MODE          /* String mode (printf-style) */
 // #define CONFIG_WW_LOG_ENCODE_MODE    /* Encode mode (binary encoding) */
 
 /* ========== Module Static Enable/Disable Switches ========== */
