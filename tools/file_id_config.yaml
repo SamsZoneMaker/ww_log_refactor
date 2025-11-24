@@ -1,0 +1,66 @@
+# File ID Configuration for Auto-Generation
+#
+# This file defines the module ranges for automatic file ID assignment.
+# Each module gets a dedicated range of IDs to avoid conflicts.
+#
+# Format:
+#   module_name:
+#     start: <first ID in range>
+#     end: <last ID in range>
+#     description: <human-readable description>
+#
+# Rules:
+#   - IDs must be in range 1-4095 (12-bit limit in log encoding)
+#   - Ranges must not overlap
+#   - Leave gaps between modules for future expansion
+#   - Never reuse IDs from deleted modules (mark as 'reserved' instead)
+
+module_ranges:
+  # System initialization and boot code (1-50)
+  brom:
+    start: 1
+    end: 50
+    description: "BROM initialization and startup code"
+
+  # Hardware driver layer (51-150)
+  drivers:
+    start: 51
+    end: 150
+    description: "Hardware drivers (UART, SPI, I2C, etc.)"
+
+  # Application layer (151-250)
+  app:
+    start: 151
+    end: 250
+    description: "Application logic and business code"
+
+  # Test code (251-300)
+  test:
+    start: 251
+    end: 300
+    description: "Unit tests and integration tests"
+
+  # Demo/example code (301-350)
+  demo:
+    start: 301
+    end: 350
+    description: "Demo applications and examples"
+
+  # Reserved for future use (351-400)
+  # middleware:
+  #   start: 351
+  #   end: 400
+  #   description: "Middleware components"
+
+  # Reserved for future use (401-500)
+  # platform:
+  #   start: 401
+  #   end: 500
+  #   description: "Platform abstraction layer"
+
+# Notes:
+# - Currently allocated: 350 IDs across 5 modules
+# - Available for expansion: 3745 IDs (351-4095)
+# - Recommended: Pre-allocate ranges before starting development
+# - Migration: If a module outgrows its range, allocate a new range
+#   and update this config (old IDs remain valid for backward compatibility)

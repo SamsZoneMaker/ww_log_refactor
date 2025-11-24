@@ -1,0 +1,19 @@
+{
+  "hash": "ba1eba82e485859aaa10396e2e58f412",
+  "file_count": 12,
+  "file_id_map": {
+    "src/app/app_config.c": 151,
+    "src/app/app_main.c": 152,
+    "src/brom/brom_boot.c": 1,
+    "src/brom/brom_loader.c": 2,
+    "src/demo/demo_init.c": 301,
+    "src/demo/demo_process.c": 302,
+    "src/drivers/drv_i2c.c": 51,
+    "src/drivers/drv_spi.c": 52,
+    "src/drivers/drv_uart.c": 53,
+    "src/test/test_integration.c": 251,
+    "src/test/test_stress.c": 252,
+    "src/test/test_unit.c": 253
+  },
+  "timestamp": 1763968056.8236802
+}
