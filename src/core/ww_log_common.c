@@ -31,6 +31,7 @@ U8 g_ww_log_level_threshold = WW_LOG_LEVEL_DBG;
 #if defined(CONFIG_WW_LOG_ENCODE_MODE) && defined(CONFIG_WW_LOG_RAM_BUFFER_EN)
 
 WW_LOG_RAM_T g_ww_log_ram = {
+    .magic = 0,
     .head = 0,
     .tail = 0,
 };
@@ -51,13 +52,21 @@ void ww_log_init(void)
     g_ww_log_level_threshold = CONFIG_WW_LOG_LEVEL_THRESHOLD;
 
 #if defined(CONFIG_WW_LOG_ENCODE_MODE) && defined(CONFIG_WW_LOG_RAM_BUFFER_EN)
-    /* Initialize RAM buffer */
-    g_ww_log_ram.head = 0;
-    g_ww_log_ram.tail = 0;
+    /* Check for warm restart (magic number detection) */
+    if (g_ww_log_ram.magic != WW_LOG_RAM_MAGIC) {
+        /* Cold start or first initialization */
+        g_ww_log_ram.magic = WW_LOG_RAM_MAGIC;
+        g_ww_log_ram.head = 0;
+        g_ww_log_ram.tail = 0;
 
-    /* Optional: clear buffer contents */
-    for (U16 i = 0; i < CONFIG_WW_LOG_RAM_ENTRY_NUM; i++) {
-        g_ww_log_ram.entries[i] = 0;
+        /* Clear buffer contents */
+        for (U16 i = 0; i < CONFIG_WW_LOG_RAM_ENTRY_NUM; i++) {
+            g_ww_log_ram.entries[i] = 0;
+        }
+    } else {
+        /* Warm restart detected - preserve existing logs */
+        /* head and tail pointers remain unchanged */
+        /* This allows reading logs that survived the reset */
     }
 #endif
 

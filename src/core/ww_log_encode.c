@@ -8,6 +8,21 @@
 
 #ifdef CONFIG_WW_LOG_ENCODE_MODE
 
+/* ========== Output Hook ========== */
+
+/**
+ * Custom output hook (NULL = no real-time UART output)
+ */
+static ww_log_encode_hook_t g_encode_output_hook = NULL;
+
+/**
+ * @brief Install custom output hook for encode mode
+ */
+void ww_log_encode_hook_install(ww_log_encode_hook_t fn)
+{
+    g_encode_output_hook = fn;
+}
+
 /* ========== RAM Buffer Management ========== */
 
 #ifdef CONFIG_WW_LOG_RAM_BUFFER_EN
@@ -58,14 +73,23 @@ static S8 ww_log_ram_write(U32 data)
  */
 static void ww_log_uart_output(U32 header, const U32 *params, U8 param_count)
 {
-    /* Output format: 0xHEADER [0xPARAM1] [0xPARAM2] ... */
-    printf("0x%08X", header);
+    /* Use hook if installed */
+    if (g_encode_output_hook) {
+        /* Output header */
+        g_encode_output_hook(header);
 
-    for (U8 i = 0; i < param_count; i++) {
-        printf(" 0x%08X", params[i]);
+        /* Output parameters */
+        for (U8 i = 0; i < param_count; i++) {
+            g_encode_output_hook(params[i]);
+        }
+    } else {
+        /* Fallback: print as hex (for debugging) */
+        printf("0x%08X", header);
+        for (U8 i = 0; i < param_count; i++) {
+            printf(" 0x%08X", params[i]);
+        }
+        printf("\n");
     }
-
-    printf("\n");
 }
 
 #endif /* CONFIG_WW_LOG_OUTPUT_UART */

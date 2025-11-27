@@ -60,6 +60,12 @@
  */
 #define CONFIG_WW_LOG_OUTPUT_UART       1
 
+/**
+ * Enable RAM buffer output
+ * Logs are stored in circular buffer (supports warm restart)
+ */
+#define CONFIG_WW_LOG_OUTPUT_RAM        1
+
 /* ========== Type Definitions ========== */
 
 typedef uint8_t  U8;

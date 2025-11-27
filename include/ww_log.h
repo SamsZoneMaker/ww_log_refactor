@@ -35,9 +35,17 @@ extern U8 g_ww_log_level_threshold;
 #if defined(CONFIG_WW_LOG_ENCODE_MODE) && defined(CONFIG_WW_LOG_RAM_BUFFER_EN)
 
 /**
+ * Magic number for warm restart detection
+ * ASCII: "WLOG" = 0x574C4F47
+ */
+#define WW_LOG_RAM_MAGIC 0x574C4F47
+
+/**
  * Circular buffer for encoded log entries
+ * Supports warm restart: if magic matches, preserve existing logs
  */
 typedef struct {
+    U32 magic;                                  /* Magic number for warm restart detection */
     U16 head;                                   /* Read pointer */
     U16 tail;                                   /* Write pointer */
     U32 entries[CONFIG_WW_LOG_RAM_ENTRY_NUM];  /* Log data buffer */
@@ -71,6 +79,24 @@ U8 ww_log_is_level_enabled(WW_LOG_LEVEL_E level);
 #ifdef CONFIG_WW_LOG_STR_MODE
 
 /**
+ * @brief String output hook function type
+ * @param msg Formatted log message
+ */
+typedef void (*ww_log_str_hook_t)(const char *msg);
+
+/**
+ * @brief Install custom output hook for string mode
+ * @param fn Hook function (NULL to use default printf)
+ *
+ * Example:
+ *   void my_uart_output(const char *msg) {
+ *       uart_puts(msg);
+ *   }
+ *   ww_log_str_hook_install(my_uart_output);
+ */
+void ww_log_str_hook_install(ww_log_str_hook_t fn);
+
+/**
  * @brief String mode logging function
  * @param module_id Module ID
  * @param level Log level
@@ -84,6 +110,24 @@ void ww_log_str_output(WW_LOG_MODULE_E module_id, WW_LOG_LEVEL_E level,
 #endif /* CONFIG_WW_LOG_STR_MODE */
 
 #ifdef CONFIG_WW_LOG_ENCODE_MODE
+
+/**
+ * @brief Encode output hook function type
+ * @param encoded_log 32-bit encoded log entry
+ */
+typedef void (*ww_log_encode_hook_t)(U32 encoded_log);
+
+/**
+ * @brief Install custom output hook for encode mode
+ * @param fn Hook function (NULL to disable real-time output)
+ *
+ * Example:
+ *   void my_uart_output(U32 encoded_log) {
+ *       uart_write_u32(encoded_log);
+ *   }
+ *   ww_log_encode_hook_install(my_uart_output);
+ */
+void ww_log_encode_hook_install(ww_log_encode_hook_t fn);
 
 /**
  * @brief Encode mode logging with 0 parameters

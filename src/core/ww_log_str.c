@@ -10,6 +10,21 @@
 
 #ifdef CONFIG_WW_LOG_STR_MODE
 
+/* ========== Output Hook ========== */
+
+/**
+ * Custom output hook (NULL = use default printf)
+ */
+static ww_log_str_hook_t g_str_output_hook = NULL;
+
+/**
+ * @brief Install custom output hook for string mode
+ */
+void ww_log_str_hook_install(ww_log_str_hook_t fn)
+{
+    g_str_output_hook = fn;
+}
+
 /**
  * @brief Get log level string
  * @param level Log level
@@ -68,6 +83,9 @@ static const char* ww_log_extract_filename(const char *path)
 void ww_log_str_output(WW_LOG_MODULE_E module_id, WW_LOG_LEVEL_E level,
                        const char *filename, U16 line, const char *fmt, ...)
 {
+    char buffer[256];
+    int offset = 0;
+
     /* Check if module is enabled */
     if (!ww_log_is_mod_enabled(module_id)) {
         return;
@@ -78,25 +96,37 @@ void ww_log_str_output(WW_LOG_MODULE_E module_id, WW_LOG_LEVEL_E level,
         return;
     }
 
-#ifdef CONFIG_WW_LOG_OUTPUT_UART
     /* Extract filename without path */
     const char *basename = ww_log_extract_filename(filename);
 
-    /* Print log header: [LEVEL][MODULE] filename:line - */
-    printf("[%s][%s] %s:%d - ",
-           ww_log_get_level_str(level),
-           ww_log_get_module_str(module_id),
-           basename,
-           line);
+    /* Format log header: [LEVEL][MODULE] filename:line - */
+    offset = snprintf(buffer, sizeof(buffer), "[%s][%s] %s:%d - ",
+                      ww_log_get_level_str(level),
+                      ww_log_get_module_str(module_id),
+                      basename,
+                      line);
 
-    /* Print formatted message */
-    va_list args;
-    va_start(args, fmt);
-    vprintf(fmt, args);
-    va_end(args);
+    /* Format message */
+    if (offset > 0 && offset < (int)sizeof(buffer)) {
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buffer + offset, sizeof(buffer) - offset, fmt, args);
+        va_end(args);
+    }
 
-    /* Print newline */
-    printf("\n");
+    /* Output to UART (via hook or printf) */
+#ifdef CONFIG_WW_LOG_OUTPUT_UART
+    if (g_str_output_hook) {
+        g_str_output_hook(buffer);
+    } else {
+        printf("%s\n", buffer);
+    }
+#endif
+
+    /* Output to RAM buffer (if enabled) */
+#ifdef CONFIG_WW_LOG_OUTPUT_RAM
+    /* TODO: Implement string-to-RAM storage if needed */
+    /* For now, RAM buffer is mainly used in ENCODE mode */
 #endif
 }
 
