@@ -6,7 +6,8 @@ MAKEFLAGS += --no-print-directory
 
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -Iinclude -g -O2
+CFLAGS = -Wall -Wextra -Iinclude -g -O2 -Os
+# CFLAGS += -Os -ffunction-sections -fdata-sections -fno-inline-small-functions -fno-section-anchors -fomit-frame-pointer
 LDFLAGS =
 
 # Detect number of CPU cores for parallel compilation
@@ -30,26 +31,7 @@ BIN_DIR = bin
 TARGET = $(BIN_DIR)/log_test
 
 # Source files
-CORE_SRCS = $(SRC_DIR)/core/ww_log_common.c \
-            $(SRC_DIR)/core/ww_log_str.c \
-            $(SRC_DIR)/core/ww_log_encode.c
-
-MODULE_SRCS = $(SRC_DIR)/demo/demo_init.c \
-              $(SRC_DIR)/demo/demo_process.c \
-              $(SRC_DIR)/test/test_unit.c \
-              $(SRC_DIR)/test/test_integration.c \
-              $(SRC_DIR)/test/test_stress.c \
-              $(SRC_DIR)/app/app_main.c \
-              $(SRC_DIR)/app/app_config.c \
-              $(SRC_DIR)/drivers/drv_uart.c \
-              $(SRC_DIR)/drivers/drv_spi.c \
-              $(SRC_DIR)/drivers/drv_i2c.c \
-              $(SRC_DIR)/brom/brom_boot.c \
-              $(SRC_DIR)/brom/brom_loader.c
-
-MAIN_SRC = $(EXAMPLES_DIR)/main.c
-
-ALL_SRCS = $(CORE_SRCS) $(MODULE_SRCS) $(MAIN_SRC)
+ALL_SRCS = $(wildcard src/*/*.c) $(wildcard examples/*.c)
 
 # Object files
 OBJS = $(ALL_SRCS:%.c=$(BUILD_DIR)/%.o)
@@ -71,14 +53,16 @@ $(BUILD_DIR) $(BIN_DIR):
 
 # Build executable
 $(TARGET): $(BUILD_DIR) $(BIN_DIR) $(OBJS)
-	@echo "$(BLUE)Linking $@...$(NC)"
+	@echo -e "$(BLUE)Linking $@...$(NC)"
 	@$(CC) $(OBJS) -o $@ $(LDFLAGS)
-	@echo "$(GREEN)Build complete: $@$(NC)"
+	@echo -e "$(GREEN)Build complete: $@$(NC)"
+	@echo -e "$(RED)Cleaning temporary build artifacts...$(NC)"
+	@rm -rf $(BUILD_DIR)
 
 # Compile source files (with dependency generation)
 $(BUILD_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	@echo "$(YELLOW)Compiling $<...$(NC)"
+	@echo -e "$(YELLOW)Compiling $<...$(NC)"
 	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # Include dependency files
@@ -189,9 +173,9 @@ test-encode-save: test-encode
 # Help
 .PHONY: help
 help:
-	@echo "$(GREEN)Log System Makefile$(NC)"
+	@echo -e "$(GREEN)Log System Makefile$(NC)"
 	@echo ""
-	@echo "$(BLUE)Targets:$(NC)"
+	@echo -e "$(BLUE)Targets:$(NC)"
 	@echo "  make [-j$(NPROCS)]    - Build with current config (parallel compilation)"
 	@echo "  make run              - Build and run with current config"
 	@echo "  make test-str         - Build and test STRING mode"
@@ -203,12 +187,12 @@ help:
 	@echo "  make clean            - Remove build artifacts"
 	@echo "  make help             - Show this help"
 	@echo ""
-	@echo "$(BLUE)Parallel Compilation:$(NC)"
+	@echo -e "$(BLUE)Parallel Compilation:$(NC)"
 	@echo "  make -j$(NPROCS)               # Use $(NPROCS) parallel jobs (detected CPU cores)"
 	@echo "  make -j8               # Use 8 parallel jobs"
 	@echo "  make test-str -j4      # Test string mode with 4 parallel jobs"
 	@echo ""
-	@echo "$(BLUE)Examples:$(NC)"
+	@echo -e "$(BLUE)Examples:$(NC)"
 	@echo "  make test-str -j$(NPROCS)      # Fast test string mode"
 	@echo "  make test-encode-save  # Test encode mode with decoding"
 	@echo "  make test-all          # Test all modes"
@@ -220,13 +204,13 @@ show-config:
 	@grep -E "^(#define|// #define) CONFIG_WW_LOG_(STR_MODE|ENCODE_MODE|DISABLED)" include/ww_log_config.h || true
 .PHONY: size-compare
 size-compare:
-	@echo "$(GREEN)===== Binary Size Comparison =====$(NC)"
+	@echo -e "$(GREEN)===== Binary Size Comparison =====$(NC)"
 	@echo ""
-	@echo "$(YELLOW)Building all three modes...$(NC)"
+	@echo -e "$(YELLOW)Building all three modes...$(NC)"
 	@echo ""
-	
+
 	@# Build STRING mode
-	@echo "$(BLUE)1. Building STRING MODE...$(NC)"
+	@echo -e "$(BLUE)1. Building STRING MODE...$(NC)"
 	@sed -i "s|^// #define CONFIG_WW_LOG_STR_MODE|#define CONFIG_WW_LOG_STR_MODE|" include/ww_log_config.h
 	@sed -i "s|^#define CONFIG_WW_LOG_ENCODE_MODE|// #define CONFIG_WW_LOG_ENCODE_MODE|" include/ww_log_config.h
 	@sed -i "s|^#define CONFIG_WW_LOG_DISABLED|// #define CONFIG_WW_LOG_DISABLED|" include/ww_log_config.h
@@ -234,10 +218,10 @@ size-compare:
 	@$(MAKE) all > /dev/null 2>&1
 	@cp $(TARGET) $(BIN_DIR)/log_test_str
 	@SIZE_STR=$$(size $(BIN_DIR)/log_test_str | tail -1 | awk '{print $$1}'); echo "  Text size: $$SIZE_STR bytes"
-	
+
 	@# Build ENCODE mode
 	@echo ""
-	@echo "$(BLUE)2. Building ENCODE MODE...$(NC)"
+	@echo -e "$(BLUE)2. Building ENCODE MODE...$(NC)"
 	@sed -i "s|^#define CONFIG_WW_LOG_STR_MODE|// #define CONFIG_WW_LOG_STR_MODE|" include/ww_log_config.h
 	@sed -i "s|^// #define CONFIG_WW_LOG_ENCODE_MODE|#define CONFIG_WW_LOG_ENCODE_MODE|" include/ww_log_config.h
 	@sed -i "s|^#define CONFIG_WW_LOG_DISABLED|// #define CONFIG_WW_LOG_DISABLED|" include/ww_log_config.h
@@ -245,10 +229,10 @@ size-compare:
 	@$(MAKE) all > /dev/null 2>&1
 	@cp $(TARGET) $(BIN_DIR)/log_test_encode
 	@SIZE_ENC=$$(size $(BIN_DIR)/log_test_encode | tail -1 | awk '{print $$1}'); echo "  Text size: $$SIZE_ENC bytes"
-	
+
 	@# Build DISABLED mode
 	@echo ""
-	@echo "$(BLUE)3. Building DISABLED MODE...$(NC)"
+	@echo -e "$(BLUE)3. Building DISABLED MODE...$(NC)"
 	@sed -i "s|^#define CONFIG_WW_LOG_STR_MODE|// #define CONFIG_WW_LOG_STR_MODE|" include/ww_log_config.h
 	@sed -i "s|^#define CONFIG_WW_LOG_ENCODE_MODE|// #define CONFIG_WW_LOG_ENCODE_MODE|" include/ww_log_config.h
 	@sed -i "s|^// #define CONFIG_WW_LOG_DISABLED|#define CONFIG_WW_LOG_DISABLED|" include/ww_log_config.h
@@ -256,22 +240,21 @@ size-compare:
 	@$(MAKE) all > /dev/null 2>&1
 	@cp $(TARGET) $(BIN_DIR)/log_test_disabled
 	@SIZE_DIS=$$(size $(BIN_DIR)/log_test_disabled | tail -1 | awk '{print $$1}'); echo "  Text size: $$SIZE_DIS bytes"
-	
+
 	@# Generate detailed comparison
 	@echo ""
-	@echo "$(GREEN)===== Size Comparison Report =====$(NC)"
+	@echo -e "$(GREEN)===== Size Comparison Report =====$(NC)"
 	@echo ""
 	@size $(BIN_DIR)/log_test_str $(BIN_DIR)/log_test_encode $(BIN_DIR)/log_test_disabled
 	@echo ""
-	@echo "$(YELLOW)Detailed Analysis:$(NC)"
+	@echo -e "$(YELLOW)Detailed Analysis:$(NC)"
 	@python3 tools/size_compare.py $(BIN_DIR)/log_test_str $(BIN_DIR)/log_test_encode $(BIN_DIR)/log_test_disabled
 	@echo ""
-	@echo "$(GREEN)Binary files saved in $(BIN_DIR)/:$(NC)"
+	@echo -e "$(GREEN)Binary files saved in $(BIN_DIR)/:$(NC)"
 	@ls -lh $(BIN_DIR)/log_test_* | awk '{print "  " $$9 " - " $$5}'
 	@echo ""
-	
+
 	@# Restore to STR mode
 	@sed -i "s|^// #define CONFIG_WW_LOG_STR_MODE|#define CONFIG_WW_LOG_STR_MODE|" include/ww_log_config.h
 	@sed -i "s|^#define CONFIG_WW_LOG_ENCODE_MODE|// #define CONFIG_WW_LOG_ENCODE_MODE|" include/ww_log_config.h
 	@sed -i "s|^#define CONFIG_WW_LOG_DISABLED|// #define CONFIG_WW_LOG_DISABLED|" include/ww_log_config.h
-
