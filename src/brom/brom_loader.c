@@ -1,61 +1,48 @@
 /**
  * @file brom_loader.c
  * @brief Boot ROM loader module
+ * @date 2025-11-29
  */
 
-#include "ww_log.h"
+/* Use default offset for this file */
+#include "brom_in.h"
 
-#define CURRENT_FILE_ID   FILE_ID_BROM_LOADER
-#define CURRENT_MODULE_ID WW_LOG_MOD_BROM
-
-/**
- * @brief Load firmware image
- */
 void brom_loader_load(void)
 {
-    TEST_LOG_INF_MSG("Loading firmware image...");
+    LOG_INF(CURRENT_MODULE_TAG, "Loading firmware image...");
+    int image_size = 65536;
 
-    int image_size = 65536;  /* 64 KB */
-    int load_address = 0x8000;
-
-    TEST_LOG_DBG_MSG("Reading image header...");
+    LOG_DBG(CURRENT_MODULE_TAG, "Reading image header...");
 
     if (image_size == 0) {
-        TEST_LOG_ERR_MSG("Invalid firmware image size!");
+        LOG_ERR(CURRENT_MODULE_TAG, "Invalid firmware image size!");
         return;
     }
 
-    TEST_LOG_INF_MSG("Firmware loaded, size=%d, addr=0x%04X", image_size, load_address);
+    LOG_INF(CURRENT_MODULE_TAG, "Image loaded, size=%d bytes", image_size);
 }
 
-/**
- * @brief Verify firmware image
- */
 void brom_loader_verify(void)
 {
-    TEST_LOG_DBG_MSG("Verifying firmware image...");
+    LOG_DBG(CURRENT_MODULE_TAG, "Verifying firmware image...");
 
-    int checksum_calculated = 0x1234;
-    int checksum_expected = 0x1234;
+    int checksum = 0xABCD;
+    int expected = 0xABCD;
 
-    if (checksum_calculated != checksum_expected) {
-        TEST_LOG_ERR_MSG("Firmware checksum mismatch!");
+    if (checksum != expected) {
+        LOG_ERR(CURRENT_MODULE_TAG, "Checksum mismatch, got=0x%X, expected=0x%X", checksum, expected);
         return;
     }
 
-    TEST_LOG_INF_MSG("Firmware verification passed");
+    LOG_INF(CURRENT_MODULE_TAG, "Image verification passed");
 }
 
-/**
- * @brief Jump to application
- */
 void brom_loader_jump(void)
 {
-    int app_entry = 0x8000;
+    LOG_INF(CURRENT_MODULE_TAG, "Jumping to application...");
 
-    TEST_LOG_INF_MSG("Jumping to application, entry=0x%04X", app_entry);
+    U32 app_address = 0x08000000;
+    LOG_DBG(CURRENT_MODULE_TAG, "Application entry point: 0x%08X", app_address);
 
-    TEST_LOG_DBG_MSG("Transfer control to application...");
-
-    TEST_LOG_INF_MSG("Bootloader completed");
+    LOG_INF(CURRENT_MODULE_TAG, "Boot loader complete");
 }

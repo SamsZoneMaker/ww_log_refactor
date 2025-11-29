@@ -1,29 +1,34 @@
 /**
  * @file demo_process.c
  * @brief Demo module processing
+ * @date 2025-11-29
+ *
+ * Example: File with custom offset for differentiation
  */
 
-#include "ww_log.h"
+/* Define file offset BEFORE including module header */
+#define CURRENT_FILE_OFFSET  DEMO_FILE_PROCESS
 
-#define CURRENT_FILE_ID   FILE_ID_DEMO_PROCESS
-#define CURRENT_MODULE_ID WW_LOG_MOD_DEMO
+#include "demo_in.h"
 
 /**
  * @brief Process demo tasks
  */
 void demo_process(int task_id)
 {
-    TEST_LOG_DBG_MSG("Processing task...");
+    /* String mode: outputs [DEMO][DBG][demo_process.c:line] message */
+    /* Encode mode: encodes as LOG_ID=34 (32+2), LINE=__LINE__, LEVEL=3 */
+    LOG_DBG(CURRENT_MODULE_TAG, "Processing task...");
 
     if (task_id < 0) {
-        TEST_LOG_ERR_MSG("Invalid task ID!");
+        LOG_ERR(CURRENT_MODULE_TAG, "Invalid task ID!");
         return;
     }
 
-    TEST_LOG_INF_MSG("Task started, id=%d", task_id);
+    LOG_INF(CURRENT_MODULE_TAG, "Task started, id=%d", task_id);
 
     /* Simulate processing */
     int result = task_id * 2;
 
-    TEST_LOG_INF_MSG("Task completed, id=%d, result=%d", task_id, result);
+    LOG_INF(CURRENT_MODULE_TAG, "Task completed, id=%d, result=%d", task_id, result);
 }

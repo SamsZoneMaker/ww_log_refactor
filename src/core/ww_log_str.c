@@ -1,133 +1,66 @@
 /**
  * @file ww_log_str.c
- * @brief String mode implementation
- * @date 2025-11-18
+ * @brief String mode logging implementation
+ * @date 2025-11-29
  */
 
 #include "ww_log.h"
+#include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 
-#ifdef CONFIG_WW_LOG_STR_MODE
-
-/* ========== Output Hook ========== */
+#ifdef WW_LOG_MODE_STR
 
 /**
- * Custom output hook (NULL = use default printf)
+ * Level name strings for output
  */
-static ww_log_str_hook_t g_str_output_hook = NULL;
+static const char* level_names[] = {
+    "ERR",  /* WW_LOG_LEVEL_ERR = 0 */
+    "WRN",  /* WW_LOG_LEVEL_WRN = 1 */
+    "INF",  /* WW_LOG_LEVEL_INF = 2 */
+    "DBG",  /* WW_LOG_LEVEL_DBG = 3 */
+};
 
 /**
- * @brief Install custom output hook for string mode
- */
-void ww_log_str_hook_install(ww_log_str_hook_t fn)
-{
-    g_str_output_hook = fn;
-}
-
-/**
- * @brief Get log level string
- * @param level Log level
- * @return Level string (ERR/WRN/INF/DBG)
- */
-static const char* ww_log_get_level_str(WW_LOG_LEVEL_E level)
-{
-    switch (level) {
-        case WW_LOG_LEVEL_ERR: return "ERR";
-        case WW_LOG_LEVEL_WRN: return "WRN";
-        case WW_LOG_LEVEL_INF: return "INF";
-        case WW_LOG_LEVEL_DBG: return "DBG";
-        default: return "???";
-    }
-}
-
-/**
- * @brief Get module name string
- * @param module_id Module ID
- * @return Module name
- */
-static const char* ww_log_get_module_str(WW_LOG_MODULE_E module_id)
-{
-    switch (module_id) {
-        case WW_LOG_MOD_DEMO:    return "DEMO";
-        case WW_LOG_MOD_TEST:    return "TEST";
-        case WW_LOG_MOD_APP:     return "APP";
-        case WW_LOG_MOD_DRIVERS: return "DRV";
-        case WW_LOG_MOD_BROM:    return "BROM";
-        default: return "UNKNOWN";
-    }
-}
-
-/**
- * @brief Extract filename from full path
- * @param path Full file path
- * @return Pointer to filename (without path)
- */
-static const char* ww_log_extract_filename(const char *path)
-{
-    const char *filename = strrchr(path, '/');
-    if (filename == NULL) {
-        filename = strrchr(path, '\\');  /* Windows path separator */
-    }
-    return (filename != NULL) ? (filename + 1) : path;
-}
-
-/**
- * @brief String mode logging function
- * @param module_id Module ID
- * @param level Log level
- * @param filename Source filename (with path)
+ * @brief Core string mode output function
+ * @param module Module tag string (e.g., "[DEMO]", "[BROM]")
+ * @param level Log level (0-3)
+ * @param filename Source filename (without path)
  * @param line Line number
- * @param fmt Format string
+ * @param fmt Printf-style format string
+ * @param ... Variable arguments
+ *
+ * Output format: [MODULE][LEVEL][filename:line] message
+ * Example: [BROM][INF][brom_boot.c:42] Boot sequence started
  */
-void ww_log_str_output(WW_LOG_MODULE_E module_id, WW_LOG_LEVEL_E level,
-                       const char *filename, U16 line, const char *fmt, ...)
+void ww_log_str_output(const char *module, U8 level,
+                       const char *filename, U32 line,
+                       const char *fmt, ...)
 {
-    char buffer[256];
-    int offset = 0;
+    va_list args;
 
-    /* Check if module is enabled */
-    if (!ww_log_is_mod_enabled(module_id)) {
-        return;
+    /* Validate level */
+    if (level > WW_LOG_LEVEL_DBG) {
+        level = WW_LOG_LEVEL_DBG;
     }
 
-    /* Check if log level is enabled */
-    if (!ww_log_is_level_enabled(level)) {
-        return;
-    }
+    /* Print header: [MODULE][LEVEL][filename:line] */
+    printf("%s[%s][%s:%u] ",
+           module,
+           level_names[level],
+           filename,
+           line);
 
-    /* Extract filename without path */
-    const char *basename = ww_log_extract_filename(filename);
+    /* Print formatted message */
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
 
-    /* Format log header: [LEVEL][MODULE] filename:line - */
-    offset = snprintf(buffer, sizeof(buffer), "[%s][%s] %s:%d - ",
-                      ww_log_get_level_str(level),
-                      ww_log_get_module_str(module_id),
-                      basename,
-                      line);
+    /* Print newline */
+    printf("\n");
 
-    /* Format message */
-    if (offset > 0 && offset < (int)sizeof(buffer)) {
-        va_list args;
-        va_start(args, fmt);
-        vsnprintf(buffer + offset, sizeof(buffer) - offset, fmt, args);
-        va_end(args);
-    }
-
-    /* Output to UART (via hook or printf) */
-#ifdef CONFIG_WW_LOG_OUTPUT_UART
-    if (g_str_output_hook) {
-        g_str_output_hook(buffer);
-    } else {
-        printf("%s\n", buffer);
-    }
-#endif
-
-    /* Output to RAM buffer (if enabled) */
-#ifdef CONFIG_WW_LOG_OUTPUT_RAM
-    /* TODO: Implement string-to-RAM storage if needed */
-    /* For now, RAM buffer is mainly used in ENCODE mode */
-#endif
+    /* Flush output for immediate visibility */
+    fflush(stdout);
 }
 
-#endif /* CONFIG_WW_LOG_STR_MODE */
+#endif /* WW_LOG_MODE_STR */

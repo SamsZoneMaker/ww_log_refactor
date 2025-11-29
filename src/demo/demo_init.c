@@ -1,31 +1,35 @@
 /**
  * @file demo_init.c
  * @brief Demo module initialization
+ * @date 2025-11-29
+ *
+ * Example: File with custom offset for differentiation
  */
 
-#include "ww_log.h"
+/* Define file offset BEFORE including module header */
+#define CURRENT_FILE_OFFSET  DEMO_FILE_INIT
 
-/* Define current file ID and module ID */
-#define CURRENT_FILE_ID   FILE_ID_DEMO_INIT
-#define CURRENT_MODULE_ID WW_LOG_MOD_DEMO
+#include "demo_in.h"
 
 /**
  * @brief Initialize demo module
  */
 void demo_init(void)
 {
-    TEST_LOG_INF_MSG("Demo module initializing...");
+    /* String mode: outputs [DEMO][INF][demo_init.c:line] message */
+    /* Encode mode: encodes as LOG_ID=33 (32+1), LINE=__LINE__, LEVEL=2 */
+    LOG_INF(CURRENT_MODULE_TAG, "Demo module initializing...");
 
     /* Simulate initialization steps */
     int status = 0;
 
-    TEST_LOG_DBG_MSG("Checking hardware...");
+    LOG_DBG(CURRENT_MODULE_TAG, "Checking hardware...");
 
     if (status == 0) {
-        TEST_LOG_INF_MSG("Hardware check passed, code=%d", status);
+        LOG_INF(CURRENT_MODULE_TAG, "Hardware check passed, code=%d", status);
     } else {
-        TEST_LOG_ERR_MSG("Hardware check failed!");
+        LOG_ERR(CURRENT_MODULE_TAG, "Hardware check failed!");
     }
 
-    TEST_LOG_WRN_MSG("Demo init completed with warnings, total_checks=%d, failed=%d", 5, 1);
+    LOG_WRN(CURRENT_MODULE_TAG, "Demo init completed with warnings, total=%d, failed=%d", 5, 1);
 }
