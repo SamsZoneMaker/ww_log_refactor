@@ -1,43 +1,24 @@
 /**
  * @file drv_spi.c
  * @brief SPI driver module
+ * @date 2025-11-29
  */
 
-#include "ww_log.h"
+#define CURRENT_FILE_OFFSET  DRV_FILE_SPI
+#include "drv_in.h"
 
-#define CURRENT_FILE_ID   FILE_ID_DRV_SPI
-#define CURRENT_MODULE_ID WW_LOG_MOD_DRIVERS
-
-/**
- * @brief Initialize SPI driver
- */
 void drv_spi_init(void)
 {
-    TEST_LOG_INF_MSG("Initializing SPI driver...");
+    LOG_INF(CURRENT_MODULE_TAG, "Initializing SPI driver...");
 
-    int clock_speed = 1000000;  /* 1 MHz */
-    int mode = 0;
+    U32 clock_speed = 1000000;  /* 1 MHz */
 
-    TEST_LOG_DBG_MSG("Configuring SPI...");
-
-    if (mode > 3) {
-        TEST_LOG_ERR_MSG("Invalid SPI mode!");
-        return;
-    }
-
-    TEST_LOG_INF_MSG("SPI initialized, speed=%d, mode=%d", clock_speed, mode);
+    LOG_DBG(CURRENT_MODULE_TAG, "Setting SPI clock to %u Hz", clock_speed);
+    LOG_INF(CURRENT_MODULE_TAG, "SPI driver initialized");
 }
 
-/**
- * @brief Transfer data via SPI
- */
 void drv_spi_transfer(int tx_len, int rx_len)
 {
-    TEST_LOG_DBG_MSG("Starting SPI transfer...");
-
-    if (tx_len != rx_len) {
-        TEST_LOG_WRN_MSG("SPI transfer length mismatch, tx=%d, rx=%d", tx_len, rx_len);
-    }
-
-    TEST_LOG_INF_MSG("SPI transfer completed");
+    LOG_DBG(CURRENT_MODULE_TAG, "SPI transfer: tx=%d bytes, rx=%d bytes", tx_len, rx_len);
+    LOG_INF(CURRENT_MODULE_TAG, "SPI transfer complete");
 }

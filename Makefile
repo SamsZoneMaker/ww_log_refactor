@@ -17,10 +17,13 @@ NC = \033[0m
 BUILD_DIR = build
 BIN_DIR = bin
 
-# Source files
+# Source files - include all modules
 ALL_SRCS = $(wildcard src/core/*.c) \
            $(wildcard src/demo/*.c) \
            $(wildcard src/brom/*.c) \
+           $(wildcard src/test/*.c) \
+           $(wildcard src/app/*.c) \
+           $(wildcard src/drivers/*.c) \
            examples/main.c
 
 # Object files
@@ -59,6 +62,9 @@ $(BUILD_DIR) $(BIN_DIR):
 	@mkdir -p $(BUILD_DIR)/src/core
 	@mkdir -p $(BUILD_DIR)/src/demo
 	@mkdir -p $(BUILD_DIR)/src/brom
+	@mkdir -p $(BUILD_DIR)/src/test
+	@mkdir -p $(BUILD_DIR)/src/app
+	@mkdir -p $(BUILD_DIR)/src/drivers
 	@mkdir -p $(BUILD_DIR)/examples
 	@mkdir -p $(BIN_DIR)
 
@@ -100,26 +106,20 @@ run: all
 	@echo ""
 	@./$(TARGET)
 
-# Build and run string mode
+# Build and run string mode (clean build)
 .PHONY: test-str
-test-str:
-	@$(MAKE) clean MODE=str
-	@$(MAKE) all MODE=str
-	@$(MAKE) run MODE=str
+test-str: clean
+	@$(MAKE) MODE=str run
 
-# Build and run encode mode
+# Build and run encode mode (clean build)
 .PHONY: test-encode
-test-encode:
-	@$(MAKE) clean MODE=encode
-	@$(MAKE) all MODE=encode
-	@$(MAKE) run MODE=encode
+test-encode: clean
+	@$(MAKE) MODE=encode run
 
-# Build and run disabled mode
+# Build and run disabled mode (clean build)
 .PHONY: test-disabled
-test-disabled:
-	@$(MAKE) clean MODE=disabled
-	@$(MAKE) all MODE=disabled
-	@$(MAKE) run MODE=disabled
+test-disabled: clean
+	@$(MAKE) MODE=disabled run
 
 # Test all modes
 .PHONY: test-all

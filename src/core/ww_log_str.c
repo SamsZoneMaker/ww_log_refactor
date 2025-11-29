@@ -30,8 +30,8 @@ static const char* level_names[] = {
  * @param fmt Printf-style format string
  * @param ... Variable arguments
  *
- * Output format: [MODULE][LEVEL][filename:line] message
- * Example: [BROM][INF][brom_boot.c:42] Boot sequence started
+ * Output format: [LEVEL][MODULE] filename:line - message
+ * Example: [INF][BROM] brom_boot.c:42 - Boot sequence started
  */
 void ww_log_str_output(const char *module, U8 level,
                        const char *filename, U32 line,
@@ -44,10 +44,10 @@ void ww_log_str_output(const char *module, U8 level,
         level = WW_LOG_LEVEL_DBG;
     }
 
-    /* Print header: [MODULE][LEVEL][filename:line] */
-    printf("%s[%s][%s:%u] ",
-           module,
+    /* Print header: [LEVEL][MODULE] filename:line - */
+    printf("[%s]%s %s:%u - ",
            level_names[level],
+           module,
            filename,
            line);
 

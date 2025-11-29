@@ -1,45 +1,25 @@
 /**
  * @file app_main.c
  * @brief Application main module
+ * @date 2025-11-29
  */
 
-#include "ww_log.h"
+#define CURRENT_FILE_OFFSET  APP_FILE_MAIN
+#include "app_in.h"
 
-#define CURRENT_FILE_ID   FILE_ID_APP_MAIN
-#define CURRENT_MODULE_ID WW_LOG_MOD_APP
-
-/**
- * @brief Application main function
- */
 void app_main(void)
 {
-    TEST_LOG_INF_MSG("Application starting...");
+    LOG_INF(CURRENT_MODULE_TAG, "Application starting...");
 
-    TEST_LOG_DBG_MSG("Initializing subsystems...");
+    int app_version = 100;
 
-    int subsystem_count = 3;
-    int init_success = 1;
-
-    if (init_success) {
-        TEST_LOG_INF_MSG("All subsystems initialized, count=%d", subsystem_count);
-    } else {
-        TEST_LOG_ERR_MSG("Subsystem initialization failed!");
-        return;
-    }
-
-    TEST_LOG_INF_MSG("Application running...");
+    LOG_DBG(CURRENT_MODULE_TAG, "Initializing application subsystems...");
+    LOG_INF(CURRENT_MODULE_TAG, "Application initialized, version=%d", app_version);
 }
 
-/**
- * @brief Application shutdown
- */
 void app_shutdown(void)
 {
-    TEST_LOG_INF_MSG("Application shutting down...");
-
-    int cleanup_code = 0;
-
-    TEST_LOG_INF_MSG("Cleanup completed, code=%d", cleanup_code);
-
-    TEST_LOG_INF_MSG("Application terminated");
+    LOG_INF(CURRENT_MODULE_TAG, "Application shutting down...");
+    LOG_DBG(CURRENT_MODULE_TAG, "Cleaning up resources...");
+    LOG_INF(CURRENT_MODULE_TAG, "Application shutdown complete");
 }

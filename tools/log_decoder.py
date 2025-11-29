@@ -1,229 +1,136 @@
 #!/usr/bin/env python3
 """
-Log Decoder Tool for Encode Mode
-Date: 2025-11-18
+Log Decoder for Encode Mode
+Decodes binary log entries to human-readable format
 
-This tool decodes binary-encoded log entries back to human-readable format.
+Encoding format (32-bit):
+  Bits 31-20: LOG_ID (12 bits, 0-4095)
+  Bits 19-8:  LINE (12 bits, 0-4095)
+  Bits 7-4:   LEVEL (4 bits, 0-15)
+  Bits 3-0:   MSG_ID (4 bits, 0-15)
 
 Usage:
-    python3 log_decoder.py <log_file>
-    python3 log_decoder.py --stdin  # Read from stdin
-    cat encode_log.txt | python3 log_decoder.py --stdin
-
-Format:
-    Input: 0xHEADER [0xPARAM1] [0xPARAM2] ...
-    Output: [LEVEL][MODULE] file_id:line - Message with parameters
+  python3 log_decoder.py <encoded_log_file>
+  python3 log_decoder.py -  (read from stdin)
 """
 
 import sys
 import re
 
-# File ID to name mapping (from log_file_id.h)
-FILE_ID_MAP = {
-    # DEMO Module (1-50)
-    1: "demo_init.c",
-    2: "demo_process.c",
-
-    # TEST Module (51-100)
-    51: "test_unit.c",
-    52: "test_integration.c",
-    53: "test_stress.c",
-
-    # APP Module (101-150)
-    101: "app_main.c",
-    102: "app_config.c",
-
-    # DRIVERS Module (151-200)
-    151: "drv_uart.c",
-    152: "drv_spi.c",
-    153: "drv_i2c.c",
-
-    # BROM Module (201-250)
-    201: "brom_boot.c",
-    202: "brom_loader.c",
-}
-
-# Module ID to name mapping
-MODULE_MAP = {
-    0: "DEMO",
-    1: "TEST",
-    2: "APP",
-    3: "DRV",
-    4: "BROM",
-}
-
-# Log level mapping (2-bit encoding)
-LEVEL_MAP = {
+# Log level names
+LEVEL_NAMES = {
     0: "ERR",
     1: "WRN",
     2: "INF",
     3: "DBG",
 }
 
+# Module/File ID to name mapping
+FILE_ID_MAP = {
+    0: "main.c",
+    # DEMO module (32-63)
+    32: "demo (default)",
+    33: "demo_init.c",
+    34: "demo_process.c",
+    # TEST module (64-95)
+    64: "test (default)",
+    65: "test_unit.c",
+    66: "test_integration.c",
+    67: "test_stress.c",
+    # APP module (96-127)
+    96: "app (default)",
+    97: "app_main.c",
+    98: "app_config.c",
+    # DRIVERS module (128-159)
+    128: "drivers (default)",
+    129: "drv_uart.c",
+    130: "drv_spi.c",
+    131: "drv_i2c.c",
+    # BROM module (160-191)
+    160: "brom (default)",
+    161: "brom_boot.c",
+    162: "brom_loader.c",
+}
 
-def decode_header(header):
-    """
-    Decode 32-bit log header.
+MODULE_NAMES = {
+    range(32, 64): "DEMO",
+    range(64, 96): "TEST",
+    range(96, 128): "APP",
+    range(128, 160): "DRV",
+    range(160, 192): "BROM",
+}
 
-    Format (32 bits):
-     31                    20 19                8 7        2 1      0
-    ┌──────────────────────┬────────────────────┬──────────┬────────┐
-    │   File ID (12 bits)  │  Line No (12 bits) │next_len  │ Level  │
-    │      0-4095          │     0-4095         │ (6 bits) │(2 bits)│
-    └──────────────────────┴────────────────────┴──────────┴────────┘
+def get_module_name(log_id):
+    for id_range, name in MODULE_NAMES.items():
+        if log_id in id_range:
+            return name
+    return "UNKNOWN"
 
-    Args:
-        header: 32-bit integer (or string like "0x12345678")
-
-    Returns:
-        dict with keys: file_id, line, level, param_count
-    """
-    if isinstance(header, str):
-        header = int(header, 16)
-
-    file_id = (header >> 20) & 0xFFF      # Bits 31-20
-    line_no = (header >> 8) & 0xFFF       # Bits 19-8
-    param_count = (header >> 2) & 0x3F    # Bits 7-2
-    level = header & 0x03                 # Bits 1-0
-
+def decode_log_entry(encoded_value):
+    if isinstance(encoded_value, str):
+        encoded_value = int(encoded_value, 16)
+    
+    log_id = (encoded_value >> 20) & 0xFFF
+    line = (encoded_value >> 8) & 0xFFF
+    level = (encoded_value >> 4) & 0xF
+    msg_id = encoded_value & 0xF
+    
     return {
-        'file_id': file_id,
-        'line': line_no,
+        'raw': encoded_value,
+        'log_id': log_id,
+        'line': line,
         'level': level,
-        'param_count': param_count,
+        'msg_id': msg_id,
+        'level_name': LEVEL_NAMES.get(level, f"L{level}"),
+        'file_name': FILE_ID_MAP.get(log_id, f"ID_{log_id}"),
+        'module_name': get_module_name(log_id),
     }
 
-
-def get_file_name(file_id):
-    """Get filename from file ID."""
-    return FILE_ID_MAP.get(file_id, f"unknown_{file_id}")
-
-
-def get_level_str(level):
-    """Get log level string."""
-    return LEVEL_MAP.get(level, "???")
-
-
-def get_module_from_file_id(file_id):
-    """Determine module from file ID range."""
-    if 1 <= file_id <= 50:
-        return "DEMO"
-    elif 51 <= file_id <= 100:
-        return "TEST"
-    elif 101 <= file_id <= 150:
-        return "APP"
-    elif 151 <= file_id <= 200:
-        return "DRV"
-    elif 201 <= file_id <= 250:
-        return "BROM"
-    else:
-        return "UNKNOWN"
-
-
-def format_log_entry(info, params):
-    """
-    Format decoded log entry.
-
-    Args:
-        info: dict from decode_header()
-        params: list of parameter values (U32)
-
-    Returns:
-        Formatted string
-    """
-    level_str = get_level_str(info['level'])
-    module_str = get_module_from_file_id(info['file_id'])
-    file_name = get_file_name(info['file_id'])
-    line = info['line']
-
-    # Base format: [LEVEL][MODULE] file_id:line (filename) - params
-    output = f"[{level_str}][{module_str}] {info['file_id']}:{line} ({file_name})"
-
-    # Append parameters if any
-    if params:
-        params_str = ", ".join([f"0x{p:08X} ({p})" for p in params])
-        output += f" - Params: [{params_str}]"
-
-    return output
-
-
-def parse_log_line(line):
-    """
-    Parse one line of encoded log output.
-
-    Expected format: 0xHEADER [0xPARAM1] [0xPARAM2] ...
-
-    Args:
-        line: String containing hex values
-
-    Returns:
-        Formatted decoded string, or None if parsing fails
-    """
-    # Remove whitespace and split by spaces
-    line = line.strip()
-    if not line:
-        return None
-
-    # Find all hex values (0x...)
-    hex_pattern = r'0x[0-9A-Fa-f]+'
-    matches = re.findall(hex_pattern, line)
-
-    if not matches:
-        return None
-
-    # First value is header
-    header = int(matches[0], 16)
-    info = decode_header(header)
-
-    # Remaining values are parameters
-    params = [int(m, 16) for m in matches[1:]]
-
-    # Verify parameter count matches
-    if len(params) != info['param_count']:
-        # Warning: parameter count mismatch
-        return f"{format_log_entry(info, params)} [WARNING: Expected {info['param_count']} params, got {len(params)}]"
-
-    return format_log_entry(info, params)
-
-
-def decode_file(file_path):
-    """Decode log file."""
-    try:
-        with open(file_path, 'r') as f:
-            for line_num, line in enumerate(f, 1):
-                decoded = parse_log_line(line)
-                if decoded:
-                    print(decoded)
-    except FileNotFoundError:
-        print(f"Error: File '{file_path}' not found.", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def decode_stdin():
-    """Decode log from stdin."""
-    for line in sys.stdin:
-        decoded = parse_log_line(line)
-        if decoded:
-            print(decoded)
-
+def format_decoded_log(decoded):
+    return (f"[{decoded['level_name']}][{decoded['module_name']}] "
+            f"{decoded['file_name']}:{decoded['line']} "
+            f"(MsgID:{decoded['msg_id']}) [Raw: 0x{decoded['raw']:08X}]")
 
 def main():
-    """Main function."""
     if len(sys.argv) < 2:
-        print("Usage:")
-        print("  python3 log_decoder.py <log_file>")
-        print("  python3 log_decoder.py --stdin")
-        print("  cat encode_log.txt | python3 log_decoder.py --stdin")
+        print("Usage: python3 log_decoder.py <file|->")
         sys.exit(1)
-
-    if sys.argv[1] == '--stdin':
-        decode_stdin()
+    
+    if sys.argv[1] == '-':
+        input_file = sys.stdin
+        filename = "stdin"
     else:
-        decode_file(sys.argv[1])
+        try:
+            input_file = open(sys.argv[1], 'r')
+            filename = sys.argv[1]
+        except FileNotFoundError:
+            print(f"Error: File '{sys.argv[1]}' not found")
+            sys.exit(1)
+    
+    print(f"Decoding logs from {filename}...")
+    print("=" * 80)
+    
+    count = 0
+    try:
+        for line in input_file:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            
+            matches = re.findall(r'0x([0-9A-Fa-f]{1,8})', line)
+            for hex_val in matches:
+                try:
+                    decoded = decode_log_entry(f"0x{hex_val}")
+                    print(f"{count:4d}: {format_decoded_log(decoded)}")
+                    count += 1
+                except Exception as e:
+                    print(f"ERROR: {e}")
+    finally:
+        if input_file != sys.stdin:
+            input_file.close()
+    
+    print("=" * 80)
+    print(f"Decoded {count} log entries")
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
