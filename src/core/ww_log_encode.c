@@ -92,17 +92,27 @@ void ww_log_ram_dump(void)
         U16 log_id = WW_LOG_DECODE_LOG_ID(entry);
         U16 line = WW_LOG_DECODE_LINE(entry);
         U8 level = WW_LOG_DECODE_LEVEL(entry);
-        U8 msg_id = WW_LOG_DECODE_MSG_ID(entry);
+        U8 param_cnt = WW_LOG_DECODE_PARAM_CNT(entry);
 
-        printf("[%04u] 0x%08X -> LogID:%3u Line:%4u Level:%u MsgID:%u\n",
+        printf("[%04u] 0x%08X -> LogID:%3u Line:%4u Level:%u ParamCnt:%u",
                count++,
                entry,
                log_id,
                line,
                level,
-               msg_id);
+               param_cnt);
 
         idx = (idx + 1) % WW_LOG_RAM_BUFFER_SIZE;
+
+        /* Print parameters if any */
+        if (param_cnt > 0) {
+            printf(" Params:");
+            for (U8 i = 0; i < param_cnt && idx != g_ww_log_ram_buffer.tail; i++) {
+                printf(" 0x%08X", g_ww_log_ram_buffer.entries[idx]);
+                idx = (idx + 1) % WW_LOG_RAM_BUFFER_SIZE;
+            }
+        }
+        printf("\n");
     }
 
     printf("===============================\n\n");
@@ -123,21 +133,36 @@ void ww_log_ram_clear(void)
 
 /**
  * @brief Core encode mode output function
- * @param encoded_log 32-bit encoded log entry
+ * @param encoded_log 32-bit encoded log entry (contains LOG_ID, LINE, LEVEL, PARAM_CNT)
+ * @param params Array of parameter values (each as U32)
+ * @param param_count Number of parameters (0-8)
  *
  * This function:
- * 1. Outputs to RAM buffer (if enabled)
- * 2. Outputs to UART as hex (for debugging/decoding)
+ * 1. Outputs to RAM buffer (if enabled): stores header + all params
+ * 2. Outputs to UART as hex: prints "0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ...\n"
  */
-void ww_log_encode_output(U32 encoded_log)
+void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count)
 {
 #ifdef WW_LOG_ENCODE_RAM_BUFFER_EN
-    /* Write to RAM buffer */
+    /* Write header to RAM buffer */
     ww_log_ram_write(encoded_log);
+
+    /* Write all parameters to RAM buffer */
+    for (U8 i = 0; i < param_count; i++) {
+        ww_log_ram_write(params[i]);
+    }
 #endif
 
-    /* Output to UART as hex for debugging */
-    printf("0x%08X\n", encoded_log);
+    /* Output to UART as hex for debugging/decoding */
+    /* Format: 0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ... */
+    printf("0x%08X", encoded_log);
+
+    /* Print all parameters */
+    for (U8 i = 0; i < param_count; i++) {
+        printf(" 0x%08X", params[i]);
+    }
+
+    printf("\n");
     fflush(stdout);
 }
 
