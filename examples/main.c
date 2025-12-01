@@ -176,21 +176,21 @@ int main(void)
 
     /* ===== Direct Logging Tests ===== */
     print_test_header("Direct Logging Tests");
-    printf("Testing LOG macros with default [DEFA] tag (no module parameter)...\n");
-    LOG_ERR("This is an error message");
-    LOG_WRN("This is a warning message");
-    LOG_INF("This is an info message");
-    LOG_DBG("This is a debug message");
+    printf("Testing LOG macros with DEFAULT module (module_id=0)...\n");
+    LOG_ERR(WW_LOG_MODULE_DEFAULT, "This is an error message");
+    LOG_WRN(WW_LOG_MODULE_DEFAULT, "This is a warning message");
+    LOG_INF(WW_LOG_MODULE_DEFAULT, "This is an info message");
+    LOG_DBG(WW_LOG_MODULE_DEFAULT, "This is a debug message");
     print_separator();
 
-    printf("Testing LOG macros with parameters (must specify [DEFA] explicitly)...\n");
-    LOG_INF("[DEFA]", "Integer value: %d", 12345);
-    LOG_INF("[DEFA]", "Multiple values: %d, %d, %d", 10, 20, 30);
+    printf("Testing LOG macros with parameters (DEFAULT module)...\n");
+    LOG_INF(WW_LOG_MODULE_DEFAULT, "Integer value: %d", 12345);
+    LOG_INF(WW_LOG_MODULE_DEFAULT, "Multiple values: %d, %d, %d", 10, 20, 30);
     print_separator();
 
-    printf("Testing LOG macros with custom module tags...\n");
-    LOG_ERR("[TEST]", "Custom module tag test");
-    LOG_INF("[MAIN]", "Main application log: value=%d", 999);
+    printf("Testing LOG macros with different module IDs...\n");
+    LOG_ERR(WW_LOG_MODULE_TEST, "TEST module error message");
+    LOG_INF(WW_LOG_MODULE_APP, "APP module log: value=%d", 999);
     print_separator();
 
 #if defined(WW_LOG_MODE_ENCODE) && defined(WW_LOG_ENCODE_RAM_BUFFER_EN)

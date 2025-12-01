@@ -29,12 +29,25 @@
  * Module base ID
  * DEMO module occupies LOG_ID range: 32-63
  */
-#define CURRENT_MODULE_BASE   WW_LOG_MOD_DEMO_BASE
+#define CURRENT_MODULE_BASE   WW_LOG_DIR_DEMO_BASE
 
 /**
- * Module name tag for string mode output
+ * Module name tag (for encode mode, as string)
  */
 #define CURRENT_MODULE_TAG    "[DEMO]"
+
+/**
+ * Module ID (for string mode and module filtering)
+ * Note: str mode requires module_id, encode mode uses module_tag string
+ * We define CURRENT_LOG_PARAM to be compatible with both modes
+ */
+#define CURRENT_MODULE_ID     WW_LOG_MODULE_DEMO
+
+#ifdef WW_LOG_MODE_STR
+#define CURRENT_LOG_PARAM     CURRENT_MODULE_ID
+#else
+#define CURRENT_LOG_PARAM     CURRENT_MODULE_TAG
+#endif
 
 /* ========== File Offset Configuration ========== */
 

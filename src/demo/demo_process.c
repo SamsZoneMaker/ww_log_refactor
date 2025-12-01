@@ -18,14 +18,14 @@ void demo_process(int task_id)
 {
     /* String mode: outputs [DEMO][DBG][demo_process.c:line] message */
     /* Encode mode: encodes as LOG_ID=34 (32+2), LINE=__LINE__, LEVEL=3 */
-    LOG_DBG(CURRENT_MODULE_TAG, "Processing task...");
+    LOG_DBG(CURRENT_LOG_PARAM, "Processing task...");
 
     if (task_id < 0) {
-        LOG_ERR(CURRENT_MODULE_TAG, "Invalid task ID!");
+        LOG_ERR(CURRENT_LOG_PARAM, "Invalid task ID!");
         return;
     }
 
-    LOG_INF(CURRENT_MODULE_TAG, "Task started, id=%d", task_id);
+    LOG_INF(CURRENT_LOG_PARAM, "Task started, id=%d", task_id);
 
     /* Simulate processing */
     int result = task_id * 2;
@@ -33,5 +33,5 @@ void demo_process(int task_id)
     (void)result;  /* Suppress unused warning in encode mode */
 #endif
 
-    LOG_INF(CURRENT_MODULE_TAG, "Task completed, id=%d, result=%d", task_id, result);
+    LOG_INF(CURRENT_LOG_PARAM, "Task completed, id=%d, result=%d", task_id, result);
 }

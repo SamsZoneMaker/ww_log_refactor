@@ -16,12 +16,20 @@
  * Module base ID
  * BROM module occupies LOG_ID range: 160-191
  */
-#define CURRENT_MODULE_BASE   WW_LOG_MOD_BROM_BASE
+#define CURRENT_MODULE_BASE   WW_LOG_DIR_BROM_BASE
 
 /**
  * Module name tag for string mode output
  */
 #define CURRENT_MODULE_TAG    "[BROM]"
+
+#define CURRENT_MODULE_ID     WW_LOG_MODULE_BROM
+
+#ifdef WW_LOG_MODE_STR
+#define CURRENT_LOG_PARAM     CURRENT_MODULE_ID
+#else
+#define CURRENT_LOG_PARAM     CURRENT_MODULE_TAG
+#endif
 
 /* ========== File Offset Configuration ========== */
 

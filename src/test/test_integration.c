@@ -9,15 +9,15 @@
 
 void test_integration_run(void)
 {
-    LOG_INF(CURRENT_MODULE_TAG, "Starting integration tests...");
+    LOG_INF(CURRENT_LOG_PARAM, "Starting integration tests...");
 
     int modules_tested = 0;
 
-    LOG_DBG(CURRENT_MODULE_TAG, "Testing module integration...");
+    LOG_DBG(CURRENT_LOG_PARAM, "Testing module integration...");
     modules_tested++;
 
-    LOG_DBG(CURRENT_MODULE_TAG, "Testing inter-module communication...");
+    LOG_DBG(CURRENT_LOG_PARAM, "Testing inter-module communication...");
     modules_tested++;
 
-    LOG_INF(CURRENT_MODULE_TAG, "Integration tests complete, modules_tested=%d", modules_tested);
+    LOG_INF(CURRENT_LOG_PARAM, "Integration tests complete, modules_tested=%d", modules_tested);
 }

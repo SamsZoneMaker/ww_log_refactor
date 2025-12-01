@@ -17,18 +17,18 @@
 void brom_boot_execute(void)
 {
     /* Encode mode: LOG_ID=161 (160+1) */
-    LOG_INF(CURRENT_MODULE_TAG, "Starting boot sequence...");
+    LOG_INF(CURRENT_LOG_PARAM, "Starting boot sequence...");
 
     int boot_stage = 1;
 
-    LOG_DBG(CURRENT_MODULE_TAG, "Boot stage 1: Hardware initialization");
+    LOG_DBG(CURRENT_LOG_PARAM, "Boot stage 1: Hardware initialization");
 
     boot_stage = 2;
-    LOG_DBG(CURRENT_MODULE_TAG, "Boot stage 2: Memory test");
+    LOG_DBG(CURRENT_LOG_PARAM, "Boot stage 2: Memory test");
 
     int memory_ok = 1;
     if (!memory_ok) {
-        LOG_ERR(CURRENT_MODULE_TAG, "Memory test failed!");
+        LOG_ERR(CURRENT_LOG_PARAM, "Memory test failed!");
         return;
     }
 
@@ -36,9 +36,9 @@ void brom_boot_execute(void)
 #ifdef WW_LOG_MODE_ENCODE
     (void)boot_stage;  /* Suppress unused warning in encode mode */
 #endif
-    LOG_INF(CURRENT_MODULE_TAG, "Boot stage 3 completed, stage=%d", boot_stage);
+    LOG_INF(CURRENT_LOG_PARAM, "Boot stage 3 completed, stage=%d", boot_stage);
 
-    LOG_INF(CURRENT_MODULE_TAG, "Boot sequence completed successfully");
+    LOG_INF(CURRENT_LOG_PARAM, "Boot sequence completed successfully");
 }
 
 /**
@@ -52,12 +52,12 @@ void brom_boot_check(void)
     (void)boot_count;   /* Suppress unused warning in encode mode */
 #endif
 
-    LOG_DBG(CURRENT_MODULE_TAG, "Checking boot status...");
+    LOG_DBG(CURRENT_LOG_PARAM, "Checking boot status...");
 
     if (last_error != 0) {
-        LOG_WRN(CURRENT_MODULE_TAG, "Previous boot had errors, count=%d, error=%d",
+        LOG_WRN(CURRENT_LOG_PARAM, "Previous boot had errors, count=%d, error=%d",
                          boot_count, last_error);
     } else {
-        LOG_INF(CURRENT_MODULE_TAG, "Boot status OK, count=%d", boot_count);
+        LOG_INF(CURRENT_LOG_PARAM, "Boot status OK, count=%d", boot_count);
     }
 }

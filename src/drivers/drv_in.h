@@ -16,12 +16,20 @@
  * Module base ID
  * DRIVERS module occupies LOG_ID range: 128-159
  */
-#define CURRENT_MODULE_BASE   WW_LOG_MOD_DRV_BASE
+#define CURRENT_MODULE_BASE   WW_LOG_DIR_DRV_BASE
 
 /**
  * Module name tag for string mode output
  */
 #define CURRENT_MODULE_TAG    "[DRV]"
+
+#define CURRENT_MODULE_ID     WW_LOG_MODULE_DRIVERS
+
+#ifdef WW_LOG_MODE_STR
+#define CURRENT_LOG_PARAM     CURRENT_MODULE_ID
+#else
+#define CURRENT_LOG_PARAM     CURRENT_MODULE_TAG
+#endif
 
 /* ========== File Offset Configuration ========== */
 

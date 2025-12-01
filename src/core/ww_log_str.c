@@ -1,7 +1,7 @@
 /**
  * @file ww_log_str.c
- * @brief String mode logging implementation
- * @date 2025-11-29
+ * @brief String mode logging implementation (refactored)
+ * @date 2025-12-01
  */
 
 #include "ww_log.h"
@@ -22,19 +22,17 @@ static const char* level_names[] = {
 };
 
 /**
- * @brief Core string mode output function
- * @param module Module tag string (e.g., "[DEMO]", "[BROM]")
- * @param level Log level (0-3)
+ * @brief Core string mode output function (refactored)
  * @param filename Source filename (without path)
  * @param line Line number
+ * @param level Log level (0-3)
  * @param fmt Printf-style format string
  * @param ... Variable arguments
  *
- * Output format: [LEVEL][MODULE] filename:line - message
- * Example: [INF][BROM] brom_boot.c:42 - Boot sequence started
+ * Output format: [LEVEL] filename:line - message
+ * Example: [INF] brom_boot.c:42 - Boot sequence started
  */
-void ww_log_str_output(const char *module, U8 level,
-                       const char *filename, U32 line,
+void ww_log_str_output(const char *filename, U32 line, U8 level,
                        const char *fmt, ...)
 {
     va_list args;
@@ -44,10 +42,9 @@ void ww_log_str_output(const char *module, U8 level,
         level = WW_LOG_LEVEL_DBG;
     }
 
-    /* Print header: [LEVEL][MODULE] filename:line - */
-    printf("[%s]%s %s:%u - ",
+    /* Print header: [LEVEL] filename:line - */
+    printf("[%s] %s:%u - ",
            level_names[level],
-           module,
            filename,
            line);
 

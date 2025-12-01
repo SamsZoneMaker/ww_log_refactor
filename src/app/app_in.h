@@ -16,12 +16,20 @@
  * Module base ID
  * APP module occupies LOG_ID range: 96-127
  */
-#define CURRENT_MODULE_BASE   WW_LOG_MOD_APP_BASE
+#define CURRENT_MODULE_BASE   WW_LOG_DIR_APP_BASE
 
 /**
  * Module name tag for string mode output
  */
 #define CURRENT_MODULE_TAG    "[APP]"
+
+#define CURRENT_MODULE_ID     WW_LOG_MODULE_APP
+
+#ifdef WW_LOG_MODE_STR
+#define CURRENT_LOG_PARAM     CURRENT_MODULE_ID
+#else
+#define CURRENT_LOG_PARAM     CURRENT_MODULE_TAG
+#endif
 
 /* ========== File Offset Configuration ========== */
 
