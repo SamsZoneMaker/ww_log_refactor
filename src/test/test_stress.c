@@ -12,6 +12,9 @@ void test_stress_run(void)
     LOG_INF(CURRENT_MODULE_TAG, "Starting stress tests...");
 
     int iterations = 1000;
+#ifdef WW_LOG_MODE_ENCODE
+    (void)iterations;  /* Suppress unused warning in encode mode */
+#endif
 
     LOG_DBG(CURRENT_MODULE_TAG, "Running stress test with %d iterations...", iterations);
 

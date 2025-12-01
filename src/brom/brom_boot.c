@@ -33,6 +33,9 @@ void brom_boot_execute(void)
     }
 
     boot_stage = 3;
+#ifdef WW_LOG_MODE_ENCODE
+    (void)boot_stage;  /* Suppress unused warning in encode mode */
+#endif
     LOG_INF(CURRENT_MODULE_TAG, "Boot stage 3 completed, stage=%d", boot_stage);
 
     LOG_INF(CURRENT_MODULE_TAG, "Boot sequence completed successfully");
@@ -45,6 +48,9 @@ void brom_boot_check(void)
 {
     int boot_count = 5;
     int last_error = 0;
+#ifdef WW_LOG_MODE_ENCODE
+    (void)boot_count;   /* Suppress unused warning in encode mode */
+#endif
 
     LOG_DBG(CURRENT_MODULE_TAG, "Checking boot status...");
 

@@ -42,6 +42,9 @@ void brom_loader_jump(void)
     LOG_INF(CURRENT_MODULE_TAG, "Jumping to application...");
 
     U32 app_address = 0x08000000;
+#ifdef WW_LOG_MODE_ENCODE
+    (void)app_address;  /* Suppress unused warning in encode mode */
+#endif
     LOG_DBG(CURRENT_MODULE_TAG, "Application entry point: 0x%08X", app_address);
 
     LOG_INF(CURRENT_MODULE_TAG, "Boot loader complete");

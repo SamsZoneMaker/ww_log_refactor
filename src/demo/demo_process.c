@@ -29,6 +29,9 @@ void demo_process(int task_id)
 
     /* Simulate processing */
     int result = task_id * 2;
+#ifdef WW_LOG_MODE_ENCODE
+    (void)result;  /* Suppress unused warning in encode mode */
+#endif
 
     LOG_INF(CURRENT_MODULE_TAG, "Task completed, id=%d, result=%d", task_id, result);
 }

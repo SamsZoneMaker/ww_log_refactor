@@ -12,6 +12,9 @@ void drv_spi_init(void)
     LOG_INF(CURRENT_MODULE_TAG, "Initializing SPI driver...");
 
     U32 clock_speed = 1000000;  /* 1 MHz */
+#ifdef WW_LOG_MODE_ENCODE
+    (void)clock_speed;  /* Suppress unused warning in encode mode */
+#endif
 
     LOG_DBG(CURRENT_MODULE_TAG, "Setting SPI clock to %u Hz", clock_speed);
     LOG_INF(CURRENT_MODULE_TAG, "SPI driver initialized");
@@ -19,6 +22,10 @@ void drv_spi_init(void)
 
 void drv_spi_transfer(int tx_len, int rx_len)
 {
+#ifdef WW_LOG_MODE_ENCODE
+    (void)tx_len;   /* Suppress unused warning in encode mode */
+    (void)rx_len;   /* Suppress unused warning in encode mode */
+#endif
     LOG_DBG(CURRENT_MODULE_TAG, "SPI transfer: tx=%d bytes, rx=%d bytes", tx_len, rx_len);
     LOG_INF(CURRENT_MODULE_TAG, "SPI transfer complete");
 }

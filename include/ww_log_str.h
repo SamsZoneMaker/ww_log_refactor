@@ -114,23 +114,126 @@ void ww_log_str_output(const char *module, U8 level,
         } \
     } while(0)
 
+/* ========== Macro Overloading Helper ========== */
+
+/**
+ * Count arguments (up to 16)
+ */
+#define _WW_LOG_ARG_COUNT(...) \
+    _WW_LOG_ARG_COUNT_IMPL(__VA_ARGS__, 16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0)
+
+#define _WW_LOG_ARG_COUNT_IMPL( \
+    _1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16,N,...) N
+
+/**
+ * Concatenate helper
+ */
+#define _WW_LOG_CONCAT(a, b) a##b
+#define _WW_LOG_CONCAT2(a, b) _WW_LOG_CONCAT(a, b)
+
+/**
+ * Overload dispatcher - select macro based on argument count
+ */
+#define _WW_LOG_OVERLOAD(prefix, ...) \
+    _WW_LOG_CONCAT2(prefix, _WW_LOG_ARG_COUNT(__VA_ARGS__))(__VA_ARGS__)
+
+/* ========== Per-Level Implementations ========== */
+
+/**
+ * 1 argument: LOG_ERR("message") -> use default [DEFA]
+ * 2+ arguments: LOG_ERR("[MOD]", "message", ...) -> use specified module
+ */
+#define _LOG_ERR_1(fmt) \
+    _LOG_ERR_WITH_MODULE("[DEFA]", fmt)
+
+#define _LOG_ERR_2(module, fmt) \
+    _LOG_ERR_WITH_MODULE(module, fmt)
+
+#define _LOG_ERR_3(module, fmt, a1) \
+    _LOG_ERR_WITH_MODULE(module, fmt, a1)
+
+#define _LOG_ERR_4(module, fmt, a1, a2) \
+    _LOG_ERR_WITH_MODULE(module, fmt, a1, a2)
+
+#define _LOG_ERR_5(module, fmt, a1, a2, a3) \
+    _LOG_ERR_WITH_MODULE(module, fmt, a1, a2, a3)
+
+#define _LOG_ERR_6(module, fmt, a1, a2, a3, a4) \
+    _LOG_ERR_WITH_MODULE(module, fmt, a1, a2, a3, a4)
+
+/* Repeat for WRN */
+#define _LOG_WRN_1(fmt) \
+    _LOG_WRN_WITH_MODULE("[DEFA]", fmt)
+
+#define _LOG_WRN_2(module, fmt) \
+    _LOG_WRN_WITH_MODULE(module, fmt)
+
+#define _LOG_WRN_3(module, fmt, a1) \
+    _LOG_WRN_WITH_MODULE(module, fmt, a1)
+
+#define _LOG_WRN_4(module, fmt, a1, a2) \
+    _LOG_WRN_WITH_MODULE(module, fmt, a1, a2)
+
+#define _LOG_WRN_5(module, fmt, a1, a2, a3) \
+    _LOG_WRN_WITH_MODULE(module, fmt, a1, a2, a3)
+
+#define _LOG_WRN_6(module, fmt, a1, a2, a3, a4) \
+    _LOG_WRN_WITH_MODULE(module, fmt, a1, a2, a3, a4)
+
+/* Repeat for INF */
+#define _LOG_INF_1(fmt) \
+    _LOG_INF_WITH_MODULE("[DEFA]", fmt)
+
+#define _LOG_INF_2(module, fmt) \
+    _LOG_INF_WITH_MODULE(module, fmt)
+
+#define _LOG_INF_3(module, fmt, a1) \
+    _LOG_INF_WITH_MODULE(module, fmt, a1)
+
+#define _LOG_INF_4(module, fmt, a1, a2) \
+    _LOG_INF_WITH_MODULE(module, fmt, a1, a2)
+
+#define _LOG_INF_5(module, fmt, a1, a2, a3) \
+    _LOG_INF_WITH_MODULE(module, fmt, a1, a2, a3)
+
+#define _LOG_INF_6(module, fmt, a1, a2, a3, a4) \
+    _LOG_INF_WITH_MODULE(module, fmt, a1, a2, a3, a4)
+
+/* Repeat for DBG */
+#define _LOG_DBG_1(fmt) \
+    _LOG_DBG_WITH_MODULE("[DEFA]", fmt)
+
+#define _LOG_DBG_2(module, fmt) \
+    _LOG_DBG_WITH_MODULE(module, fmt)
+
+#define _LOG_DBG_3(module, fmt, a1) \
+    _LOG_DBG_WITH_MODULE(module, fmt, a1)
+
+#define _LOG_DBG_4(module, fmt, a1, a2) \
+    _LOG_DBG_WITH_MODULE(module, fmt, a1, a2)
+
+#define _LOG_DBG_5(module, fmt, a1, a2, a3) \
+    _LOG_DBG_WITH_MODULE(module, fmt, a1, a2, a3)
+
+#define _LOG_DBG_6(module, fmt, a1, a2, a3, a4) \
+    _LOG_DBG_WITH_MODULE(module, fmt, a1, a2, a3, a4)
+
 /* ========== Public API Macros ========== */
 
 /**
- * Public logging macros
- * First argument is always the module tag
- * Usage: LOG_INF("[MODULE]", "format", args...)
+ * Public logging macros with optional module parameter
+ *
+ * Usage:
+ *   LOG_ERR("message")                    -> [ERR][DEFA] file:line - message
+ *   LOG_ERR("[BROM]", "message")          -> [ERR][BROM] file:line - message
+ *   LOG_ERR("[BROM]", "val=%d", 123)      -> [ERR][BROM] file:line - val=123
+ *
+ * Note: If you want to use default module WITH parameters, you must specify [DEFA]:
+ *   LOG_ERR("[DEFA]", "val=%d", 123)      -> [ERR][DEFA] file:line - val=123
  */
-#define LOG_ERR(module, ...) \
-    _LOG_ERR_WITH_MODULE(module, ##__VA_ARGS__)
-
-#define LOG_WRN(module, ...) \
-    _LOG_WRN_WITH_MODULE(module, ##__VA_ARGS__)
-
-#define LOG_INF(module, ...) \
-    _LOG_INF_WITH_MODULE(module, ##__VA_ARGS__)
-
-#define LOG_DBG(module, ...) \
-    _LOG_DBG_WITH_MODULE(module, ##__VA_ARGS__)
+#define LOG_ERR(...) _WW_LOG_OVERLOAD(_LOG_ERR_, __VA_ARGS__)
+#define LOG_WRN(...) _WW_LOG_OVERLOAD(_LOG_WRN_, __VA_ARGS__)
+#define LOG_INF(...) _WW_LOG_OVERLOAD(_LOG_INF_, __VA_ARGS__)
+#define LOG_DBG(...) _WW_LOG_OVERLOAD(_LOG_DBG_, __VA_ARGS__)
 
 #endif /* WW_LOG_STR_H */

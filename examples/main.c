@@ -27,6 +27,25 @@ extern void demo_process(int task_id);
 extern void brom_boot_execute(void);
 extern void brom_boot_check(void);
 
+/* TEST module */
+extern void test_unit_run(void);
+extern void test_integration_run(void);
+extern void test_stress_run(void);
+
+/* APP module */
+extern void app_main(void);
+extern void app_config_load(void);
+extern void app_config_save(void);
+
+/* DRIVERS module */
+extern void drv_uart_init(void);
+extern void drv_uart_send(int length);
+extern void drv_spi_init(void);
+extern void drv_spi_transfer(int tx_len, int rx_len);
+extern void drv_i2c_init(void);
+extern void drv_i2c_read(int device_addr, int reg_addr);
+extern void drv_i2c_write(int device_addr, int data);
+
 /**
  * @brief Print test header
  */
@@ -97,18 +116,81 @@ int main(void)
     brom_boot_check();
     print_separator();
 
-    /* ===== Direct Logging Tests ===== */
-    print_test_header("Direct Logging Tests");
-    printf("Testing LOG macros with default [DEFA] tag...\n");
-    LOG_ERR("[DEFA]", "This is an error message");
-    LOG_WRN("[DEFA]", "This is a warning message");
-    LOG_INF("[DEFA]", "This is an info message");
-    LOG_DBG("[DEFA]", "This is a debug message");
+    /* ===== TEST Module Tests ===== */
+    print_test_header("TEST Module Tests");
+    printf("Testing test_unit_run() with custom file offset (LOG_ID=65)...\n");
+    test_unit_run();
     print_separator();
 
-    printf("Testing LOG macros with parameters...\n");
+    printf("Testing test_integration_run() with custom file offset (LOG_ID=66)...\n");
+    test_integration_run();
+    print_separator();
+
+    printf("Testing test_stress_run() with custom file offset (LOG_ID=67)...\n");
+    test_stress_run();
+    print_separator();
+
+    /* ===== APP Module Tests ===== */
+    print_test_header("APP Module Tests");
+    printf("Testing app_main() with custom file offset (LOG_ID=97)...\n");
+    app_main();
+    print_separator();
+
+    printf("Testing app_config_load() with custom file offset (LOG_ID=98)...\n");
+    app_config_load();
+    print_separator();
+
+    printf("Testing app_config_save() with custom file offset (LOG_ID=98)...\n");
+    app_config_save();
+    print_separator();
+
+    /* ===== DRIVERS Module Tests ===== */
+    print_test_header("DRIVERS Module Tests");
+    printf("Testing drv_uart_init() with custom file offset (LOG_ID=129)...\n");
+    drv_uart_init();
+    print_separator();
+
+    printf("Testing drv_uart_send()...\n");
+    drv_uart_send(128);
+    print_separator();
+
+    printf("Testing drv_spi_init() with custom file offset (LOG_ID=130)...\n");
+    drv_spi_init();
+    print_separator();
+
+    printf("Testing drv_spi_transfer()...\n");
+    drv_spi_transfer(64, 64);
+    print_separator();
+
+    printf("Testing drv_i2c_init() with custom file offset (LOG_ID=131)...\n");
+    drv_i2c_init();
+    print_separator();
+
+    printf("Testing drv_i2c_read()...\n");
+    drv_i2c_read(0x50, 0x10);
+    print_separator();
+
+    printf("Testing drv_i2c_write()...\n");
+    drv_i2c_write(0x50, 0xAB);
+    print_separator();
+
+    /* ===== Direct Logging Tests ===== */
+    print_test_header("Direct Logging Tests");
+    printf("Testing LOG macros with default [DEFA] tag (no module parameter)...\n");
+    LOG_ERR("This is an error message");
+    LOG_WRN("This is a warning message");
+    LOG_INF("This is an info message");
+    LOG_DBG("This is a debug message");
+    print_separator();
+
+    printf("Testing LOG macros with parameters (must specify [DEFA] explicitly)...\n");
     LOG_INF("[DEFA]", "Integer value: %d", 12345);
     LOG_INF("[DEFA]", "Multiple values: %d, %d, %d", 10, 20, 30);
+    print_separator();
+
+    printf("Testing LOG macros with custom module tags...\n");
+    LOG_ERR("[TEST]", "Custom module tag test");
+    LOG_INF("[MAIN]", "Main application log: value=%d", 999);
     print_separator();
 
 #if defined(WW_LOG_MODE_ENCODE) && defined(WW_LOG_ENCODE_RAM_BUFFER_EN)
@@ -130,13 +212,17 @@ int main(void)
     printf("  All Tests Completed\n");
     printf("=======================================\n");
     printf("\nTest Summary:\n");
-    printf("- Module-level IDs: Demo(32-63), BROM(160-191)\n");
-    printf("- File-level differentiation: Enabled for demo_init and brom_boot\n");
-    printf("- Both string and encode modes tested successfully\n");
+    printf("- All 5 modules tested: DEMO, BROM, TEST, APP, DRIVERS\n");
+    printf("- Module-level IDs: DEMO(32-63), TEST(64-95), APP(96-127)\n");
+    printf("  DRV(128-159), BROM(160-191)\n");
+    printf("- File-level differentiation: Enabled in all modules\n");
+    printf("- Optional module parameter: Defaults to [DEFA] when not specified\n");
+    printf("- Both string and encode modes supported\n");
     printf("\nNext steps:\n");
     printf("- Compile with 'make MODE=str' for string mode\n");
     printf("- Compile with 'make MODE=encode' for encode mode\n");
-    printf("- Check code size with 'size build/main'\n");
+    printf("- Check code size with 'size bin/log_test_{str,encode}'\n");
+    printf("- Decode binary logs with 'tools/log_decoder.py'\n");
     printf("=======================================\n\n");
 
     return 0;

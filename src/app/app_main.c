@@ -12,6 +12,9 @@ void app_main(void)
     LOG_INF(CURRENT_MODULE_TAG, "Application starting...");
 
     int app_version = 100;
+#ifdef WW_LOG_MODE_ENCODE
+    (void)app_version;  /* Suppress unused warning in encode mode */
+#endif
 
     LOG_DBG(CURRENT_MODULE_TAG, "Initializing application subsystems...");
     LOG_INF(CURRENT_MODULE_TAG, "Application initialized, version=%d", app_version);
