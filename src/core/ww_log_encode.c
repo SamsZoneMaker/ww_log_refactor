@@ -91,23 +91,23 @@ void ww_log_ram_dump(void)
         /* Decode and print */
         U16 log_id = WW_LOG_DECODE_LOG_ID(entry);
         U16 line = WW_LOG_DECODE_LINE(entry);
+        U8 data_len = WW_LOG_DECODE_DATA_LEN(entry);
         U8 level = WW_LOG_DECODE_LEVEL(entry);
-        U8 param_cnt = WW_LOG_DECODE_PARAM_CNT(entry);
 
-        printf("[%04u] 0x%08X -> LogID:%3u Line:%4u Level:%u ParamCnt:%u",
+        printf("[%04u] 0x%08X -> LogID:%3u Line:%4u DataLen:%u Level:%u",
                count++,
                entry,
                log_id,
                line,
-               level,
-               param_cnt);
+               data_len,
+               level);
 
         idx = (idx + 1) % WW_LOG_RAM_BUFFER_SIZE;
 
         /* Print parameters if any */
-        if (param_cnt > 0) {
+        if (data_len > 0) {
             printf(" Params:");
-            for (U8 i = 0; i < param_cnt && idx != g_ww_log_ram_buffer.tail; i++) {
+            for (U8 i = 0; i < data_len && idx != g_ww_log_ram_buffer.tail; i++) {
                 printf(" 0x%08X", g_ww_log_ram_buffer.entries[idx]);
                 idx = (idx + 1) % WW_LOG_RAM_BUFFER_SIZE;
             }

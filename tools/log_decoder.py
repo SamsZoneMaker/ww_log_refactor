@@ -6,10 +6,10 @@ Decodes binary log entries to human-readable format
 Encoding format (32-bit header):
   Bits 31-20: LOG_ID (12 bits, 0-4095)
   Bits 19-8:  LINE (12 bits, 0-4095)
-  Bits 7-4:   LEVEL (4 bits, 0-15)
-  Bits 3-0:   PARAM_CNT (4 bits, 0-15)
+  Bits 7-2:   DATA_LEN (6 bits, 0-63)
+  Bits 1-0:   LEVEL (2 bits, 0-3)
 
-Followed by PARAM_CNT U32 parameter values
+Followed by DATA_LEN U32 parameter values
 
 Output format:
   0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ...
@@ -78,15 +78,15 @@ def decode_log_entry(encoded_value):
 
     log_id = (encoded_value >> 20) & 0xFFF
     line = (encoded_value >> 8) & 0xFFF
-    level = (encoded_value >> 4) & 0xF
-    param_cnt = encoded_value & 0xF
+    data_len = (encoded_value >> 2) & 0x3F
+    level = encoded_value & 0x3
 
     return {
         'raw': encoded_value,
         'log_id': log_id,
         'line': line,
+        'data_len': data_len,
         'level': level,
-        'param_cnt': param_cnt,
         'level_name': LEVEL_NAMES.get(level, f"L{level}"),
         'file_name': FILE_ID_MAP.get(log_id, f"ID_{log_id}"),
         'module_name': get_module_name(log_id),
@@ -140,9 +140,9 @@ def main():
                 decoded = decode_log_entry(f"0x{header_hex}")
 
                 # Following hex values are parameters
-                param_cnt = decoded['param_cnt']
+                data_len = decoded['data_len']
                 params = []
-                for i in range(1, min(1 + param_cnt, len(hex_values))):
+                for i in range(1, min(1 + data_len, len(hex_values))):
                     params.append(int(hex_values[i], 16))
 
                 print(f"{count:4d}: {format_decoded_log(decoded, params)}")

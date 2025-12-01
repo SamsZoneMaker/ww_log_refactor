@@ -9,17 +9,17 @@
  * - Encoding format: 32-bit header + parameter values
  *
  * Encoding Layout (32 bits):
- * ┌─────────────┬─────────────┬─────────┬────────────┐
- * │ LOG_ID      │ LINE        │ LEVEL   │ PARAM_CNT  │
- * │ (12 bits)   │ (12 bits)   │ (4 bits)│ (4 bits)   │
- * │ 31       20 │ 19        8 │ 7     4 │ 3       0  │
- * └─────────────┴─────────────┴─────────┴────────────┘
+ * ┌─────────────┬─────────────┬──────────────┬────────┐
+ * │ LOG_ID      │ LINE        │ DATA_LEN     │ LEVEL  │
+ * │ (12 bits)   │ (12 bits)   │ (6 bits)     │(2 bits)│
+ * │ 31       20 │ 19        8 │ 7          2 │ 1    0 │
+ * └─────────────┴─────────────┴──────────────┴────────┘
  *
  * Where:
  * - LOG_ID: Module base ID + file offset (from CURRENT_LOG_ID)
  * - LINE: Source line number (__LINE__)
+ * - DATA_LEN: Number of data parameters (0-63, currently support 0-8)
  * - LEVEL: Log level (ERR=0, WRN=1, INF=2, DBG=3)
- * - PARAM_CNT: Number of parameters (0-15, max 8 supported)
  *
  * Output format:
  *   0x08302732 0x00000050 0x000000AB
@@ -55,16 +55,16 @@
  * Encode a log entry into 32-bit format
  * @param log_id Module/file identifier (12 bits, 0-4095)
  * @param line Line number (12 bits, 0-4095)
- * @param level Log level (4 bits, 0-15)
- * @param param_cnt Number of parameters (4 bits, 0-15)
+ * @param data_len Number of data parameters (6 bits, 0-63)
+ * @param level Log level (2 bits, 0-3: ERR/WRN/INF/DBG)
  * @return 32-bit encoded value
  */
-#define WW_LOG_ENCODE(log_id, line, level, param_cnt) \
+#define WW_LOG_ENCODE(log_id, line, data_len, level) \
     ((U32)( \
         (((U32)(log_id) & 0xFFF) << 20) | \
         (((U32)(line) & 0xFFF) << 8) | \
-        (((U32)(level) & 0xF) << 4) | \
-        ((U32)(param_cnt) & 0xF) \
+        (((U32)(data_len) & 0x3F) << 2) | \
+        ((U32)(level) & 0x3) \
     ))
 
 /**
@@ -72,8 +72,8 @@
  */
 #define WW_LOG_DECODE_LOG_ID(encoded)      (((encoded) >> 20) & 0xFFF)
 #define WW_LOG_DECODE_LINE(encoded)        (((encoded) >> 8) & 0xFFF)
-#define WW_LOG_DECODE_LEVEL(encoded)       (((encoded) >> 4) & 0xF)
-#define WW_LOG_DECODE_PARAM_CNT(encoded)   ((encoded) & 0xF)
+#define WW_LOG_DECODE_DATA_LEN(encoded)    (((encoded) >> 2) & 0x3F)
+#define WW_LOG_DECODE_LEVEL(encoded)       ((encoded) & 0x3)
 
 /* ========== Output Function Declaration ========== */
 
@@ -121,7 +121,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
 #define _LOG_ENCODE_1(level, fmt) \
     do { \
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 0); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 0, level); \
             ww_log_encode_output(_encoded, (const U32*)0, 0); \
         } \
     } while(0)
@@ -131,7 +131,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
     do { \
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 0); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 0, level); \
             ww_log_encode_output(_encoded, (const U32*)0, 0); \
         } \
     } while(0)
@@ -142,7 +142,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
             U32 _params[] = {(U32)(p1)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 1); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 1, level); \
             ww_log_encode_output(_encoded, _params, 1); \
         } \
     } while(0)
@@ -153,7 +153,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
             U32 _params[] = {(U32)(p1), (U32)(p2)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 2); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 2, level); \
             ww_log_encode_output(_encoded, _params, 2); \
         } \
     } while(0)
@@ -164,7 +164,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
             U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 3); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 3, level); \
             ww_log_encode_output(_encoded, _params, 3); \
         } \
     } while(0)
@@ -175,7 +175,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
             U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 4); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 4, level); \
             ww_log_encode_output(_encoded, _params, 4); \
         } \
     } while(0)
@@ -186,7 +186,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
             U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4), (U32)(p5)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 5); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 5, level); \
             ww_log_encode_output(_encoded, _params, 5); \
         } \
     } while(0)
@@ -197,7 +197,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
             U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4), (U32)(p5), (U32)(p6)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 6); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 6, level); \
             ww_log_encode_output(_encoded, _params, 6); \
         } \
     } while(0)
@@ -208,7 +208,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
             U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4), (U32)(p5), (U32)(p6), (U32)(p7)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 7); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 7, level); \
             ww_log_encode_output(_encoded, _params, 7); \
         } \
     } while(0)
@@ -219,7 +219,7 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
         if (WW_LOG_LEVEL_THRESHOLD >= level) { \
             (void)module_tag; \
             U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4), (U32)(p5), (U32)(p6), (U32)(p7), (U32)(p8)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, level, 8); \
+            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 8, level); \
             ww_log_encode_output(_encoded, _params, 8); \
         } \
     } while(0)
