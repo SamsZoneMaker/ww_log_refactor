@@ -1,7 +1,7 @@
 /**
  * @file ww_log_config.h
  * @brief Log system configuration
- * @date 2025-11-18
+ * @date 2025-12-01
  */
 
 #ifndef WW_LOG_CONFIG_H
@@ -16,19 +16,7 @@
 #define CONFIG_WW_LOG_STR_MODE          /* String mode (printf-style) */
 // #define CONFIG_WW_LOG_ENCODE_MODE    /* Encode mode (binary encoding) */
 
-/* ========== Module Static Enable/Disable Switches ========== */
-
-/**
- * Static switches: Compile-time control
- * When disabled, all log code for that module is removed from binary
- */
-#define CONFIG_WW_LOG_MOD_DEMO_EN       1
-#define CONFIG_WW_LOG_MOD_TEST_EN       1
-#define CONFIG_WW_LOG_MOD_APP_EN        1
-#define CONFIG_WW_LOG_MOD_DRIVERS_EN    1
-#define CONFIG_WW_LOG_MOD_BROM_EN       1
-
-/* ========== RAM Buffer Configuration ========== */
+/* ========== RAM Buffer Configuration (Encode Mode) ========== */
 
 /**
  * Number of log entries in RAM circular buffer
@@ -91,18 +79,23 @@ typedef enum {
     WW_LOG_LEVEL_DBG = 3,
 } WW_LOG_LEVEL_E;
 
-/* ========== Module ID Enumeration ========== */
+/* ========== Module Control ========== */
 
 /**
- * Module IDs for dynamic enable/disable control
+ * Module IDs and dynamic enable/disable control are now defined in ww_log_modules.h
+ *
+ * Use the following APIs for runtime control:
+ *   - ww_log_set_module_mask(U32 mask)     // Set entire mask
+ *   - ww_log_enable_module(U8 module_id)   // Enable one module
+ *   - ww_log_disable_module(U8 module_id)  // Disable one module
+ *
+ * Module IDs:
+ *   - WW_LOG_MODULE_DEFAULT   (0)
+ *   - WW_LOG_MODULE_DEMO      (1)
+ *   - WW_LOG_MODULE_TEST      (2)
+ *   - WW_LOG_MODULE_APP       (3)
+ *   - WW_LOG_MODULE_DRIVERS   (4)
+ *   - WW_LOG_MODULE_BROM      (5)
  */
-typedef enum {
-    WW_LOG_MOD_DEMO = 0,
-    WW_LOG_MOD_TEST = 1,
-    WW_LOG_MOD_APP = 2,
-    WW_LOG_MOD_DRIVERS = 3,
-    WW_LOG_MOD_BROM = 4,
-    WW_LOG_MOD_MAX
-} WW_LOG_MODULE_E;
 
 #endif /* WW_LOG_CONFIG_H */
