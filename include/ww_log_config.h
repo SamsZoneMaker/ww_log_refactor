@@ -63,21 +63,17 @@ typedef int8_t   S8;
 typedef int16_t  S16;
 typedef int32_t  S32;
 
-/* ========== Log Level Enumeration ========== */
+/* ========== Log Level Definitions ========== */
 
 /**
- * Log levels (2-bit encoding in encode_mode)
- * 0: ERR - Error (system failures, critical issues)
- * 1: WRN - Warning (potential problems)
- * 2: INF - Info (important state changes)
- * 3: DBG - Debug (detailed execution flow)
+ * Log levels are defined in ww_log.h as macros for compile-time comparison
+ *
+ * Values:
+ *   0: ERR - Error (system failures, critical issues)
+ *   1: WRN - Warning (potential problems)
+ *   2: INF - Info (important state changes)
+ *   3: DBG - Debug (detailed execution flow)
  */
-typedef enum {
-    WW_LOG_LEVEL_ERR = 0,
-    WW_LOG_LEVEL_WRN = 1,
-    WW_LOG_LEVEL_INF = 2,
-    WW_LOG_LEVEL_DBG = 3,
-} WW_LOG_LEVEL_E;
 
 /* ========== Module Control ========== */
 

@@ -1,17 +1,17 @@
 /**
  * @file ww_log.h
  * @brief Unified logging system - main entry point
- * @date 2025-11-29
+ * @date 2025-12-01
  *
  * Unified logging API supporting two modes:
  * - WW_LOG_MODE_STR: String mode (printf-style, human-readable)
  * - WW_LOG_MODE_ENCODE: Encode mode (binary encoding, minimal code size)
  *
  * Usage:
- *   LOG_ERR(fmt, ...)   - Error level
- *   LOG_WRN(fmt, ...)   - Warning level
- *   LOG_INF(fmt, ...)   - Info level
- *   LOG_DBG(fmt, ...)   - Debug level
+ *   LOG_ERR(module_id, fmt, ...)   - Error level (str mode uses module_id, encode mode uses tag)
+ *   LOG_WRN(module_id, fmt, ...)   - Warning level
+ *   LOG_INF(module_id, fmt, ...)   - Info level
+ *   LOG_DBG(module_id, fmt, ...)   - Debug level
  *
  * Mode selection is done at compile time via Makefile or build system.
  */
@@ -19,15 +19,7 @@
 #ifndef WW_LOG_H
 #define WW_LOG_H
 
-#include <stdint.h>
-
-/* Type definitions */
-typedef uint8_t  U8;
-typedef uint16_t U16;
-typedef uint32_t U32;
-typedef int8_t   S8;
-typedef int16_t  S16;
-typedef int32_t  S32;
+#include "ww_log_config.h"
 
 /**
  * Log level definitions (using macros for compile-time comparison)

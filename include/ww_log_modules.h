@@ -38,12 +38,7 @@
 #ifndef WW_LOG_MODULES_H
 #define WW_LOG_MODULES_H
 
-#include <stdint.h>
-
-/* Type definitions (compatible with ww_log.h) */
-typedef uint8_t  U8;
-typedef uint16_t U16;
-typedef uint32_t U32;
+#include "ww_log_config.h"
 
 /* ========== Module ID Definitions ========== */
 
