@@ -1,6 +1,6 @@
 /**
  * @file ww_log_config.h
- * @brief Log system configuration
+ * @brief Log system configuration and type definitions
  * @date 2025-12-01
  */
 
@@ -8,51 +8,6 @@
 #define WW_LOG_CONFIG_H
 
 #include <stdint.h>
-
-/* ========== Log Mode Selection (Choose ONE) ========== */
-
-/* Uncomment ONE of the following modes: */
-// #define CONFIG_WW_LOG_DISABLED       /* No logging output */
-#define CONFIG_WW_LOG_STR_MODE          /* String mode (printf-style) */
-// #define CONFIG_WW_LOG_ENCODE_MODE    /* Encode mode (binary encoding) */
-
-/* ========== RAM Buffer Configuration (Encode Mode) ========== */
-
-/**
- * Number of log entries in RAM circular buffer
- * Each entry is 32-bit (4 bytes)
- * Total RAM usage = CONFIG_WW_LOG_RAM_ENTRY_NUM * 4 bytes
- */
-#define CONFIG_WW_LOG_RAM_ENTRY_NUM     1024
-
-/**
- * Enable RAM buffer (for encode_mode)
- * When enabled, logs are stored in circular buffer
- */
-#define CONFIG_WW_LOG_RAM_BUFFER_EN     1
-
-/* ========== Global Log Level Threshold ========== */
-
-/**
- * Global compile-time log level filter
- * Logs below this level will be compiled out
- * 0=ERR, 1=WRN, 2=INF, 3=DBG
- */
-#define CONFIG_WW_LOG_LEVEL_THRESHOLD   3  /* DBG - allow all */
-
-/* ========== Output Targets ========== */
-
-/**
- * Enable UART output
- * Logs are printed to stdout/UART in real-time
- */
-#define CONFIG_WW_LOG_OUTPUT_UART       1
-
-/**
- * Enable RAM buffer output
- * Logs are stored in circular buffer (supports warm restart)
- */
-#define CONFIG_WW_LOG_OUTPUT_RAM        1
 
 /* ========== Type Definitions ========== */
 
@@ -78,7 +33,7 @@ typedef int32_t  S32;
 /* ========== Module Control ========== */
 
 /**
- * Module IDs and dynamic enable/disable control are now defined in ww_log_modules.h
+ * Module IDs and dynamic enable/disable control are defined in ww_log_modules.h
  *
  * Use the following APIs for runtime control:
  *   - ww_log_set_module_mask(U32 mask)     // Set entire mask
@@ -92,6 +47,28 @@ typedef int32_t  S32;
  *   - WW_LOG_MODULE_APP       (3)
  *   - WW_LOG_MODULE_DRIVERS   (4)
  *   - WW_LOG_MODULE_BROM      (5)
+ */
+
+/* ========== Mode Selection ========== */
+
+/**
+ * Log mode is selected at compile time via Makefile:
+ *   - WW_LOG_MODE_STR: String mode (printf-style, human-readable)
+ *   - WW_LOG_MODE_ENCODE: Encode mode (binary encoding, minimal code size)
+ *   - WW_LOG_MODE_DISABLED: All logging disabled
+ *
+ * The Makefile defines these via -D compiler flags.
+ * See ww_log.h for mode-specific implementations.
+ */
+
+/* ========== Encode Mode RAM Buffer ========== */
+
+/**
+ * RAM buffer is configured in ww_log_encode.h:
+ *   - WW_LOG_ENCODE_RAM_BUFFER_EN: Enable/disable RAM buffer (ifdef guard)
+ *   - WW_LOG_RAM_BUFFER_SIZE: Number of 32-bit entries (default: 128)
+ *
+ * Total RAM usage = WW_LOG_RAM_BUFFER_SIZE * 4 bytes
  */
 
 #endif /* WW_LOG_CONFIG_H */
