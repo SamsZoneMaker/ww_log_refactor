@@ -124,22 +124,15 @@ void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
  * Internal encode macros with different parameter counts
  * Argument count includes all parameters passed to LOG_XXX macro
  *
- * Pattern:
- *   1 arg: ("msg") - message only, 0 data params
- *   2 args: ("[TAG]", "msg") - module + message, 0 data params
- *   3 args: ("[TAG]", "msg", p1) - module + message + 1 data param
- *   N args: ("[TAG]", "msg", p1, ..., pN-2) - module + message + (N-2) data params
+ * Pattern (all macros require module_tag parameter):
+ *   2 args: (module_tag, "msg") - module + message, 0 data params
+ *   3 args: (module_tag, "msg", p1) - module + message + 1 data param
+ *   4 args: (module_tag, "msg", p1, p2) - module + message + 2 data params
+ *   N args: (module_tag, "msg", p1, ..., pN-2) - module + message + (N-2) data params
+ *
+ * Note: _LOG_ENCODE_1 is intentionally omitted because all LOG calls now
+ *       require a module parameter (CURRENT_LOG_PARAM), so minimum is 2 args.
  */
-
-/* 1 arg: message only, use default tag, 0 data params */
-#define _LOG_ENCODE_1(level, fmt) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 0, level); \
-            ww_log_encode_output(_encoded, (const U32*)0, 0); \
-        } \
-    } while(0)
 
 /* 2 args: module + message, 0 data params */
 #define _LOG_ENCODE_2(level, module_tag, fmt) \
