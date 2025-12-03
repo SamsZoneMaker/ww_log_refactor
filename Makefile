@@ -33,6 +33,11 @@ OBJS = $(ALL_SRCS:%.c=$(BUILD_DIR)/%.o)
 # Usage: make MODE=encode
 MODE ?= str
 
+# Static module switches (compile-time enable/disable)
+# Usage: make MODE=str STATIC_OPTS="-DWW_LOG_STATIC_MODULE_DEMO_EN=0"
+# Multiple modules: STATIC_OPTS="-DWW_LOG_STATIC_MODULE_DEMO_EN=0 -DWW_LOG_STATIC_MODULE_TEST_EN=0"
+STATIC_OPTS ?=
+
 # Set mode-specific flags
 ifeq ($(MODE),str)
     CFLAGS += -DWW_LOG_MODE_STR
@@ -46,6 +51,11 @@ else ifeq ($(MODE),disabled)
     MODE_STR = "DISABLED MODE"
 else
     $(error Invalid MODE=$(MODE). Use: MODE=str, MODE=encode, or MODE=disabled)
+endif
+
+# Add static switches to CFLAGS
+ifneq ($(STATIC_OPTS),)
+    CFLAGS += $(STATIC_OPTS)
 endif
 
 # Output executable

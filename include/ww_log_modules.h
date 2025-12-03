@@ -60,6 +60,80 @@
  */
 #define WW_LOG_MODULE_MAX       32
 
+/* ========== Static Module Switches (Compile-time) ========== */
+
+/**
+ * Static module switches - compile-time enable/disable
+ *
+ * These switches determine whether a module's LOG code is compiled into the binary.
+ * - If set to 0: All LOG calls for this module are compiled out (zero code size)
+ * - If set to 1: LOG code is compiled in and can be controlled by dynamic switch
+ *
+ * Use cases:
+ * - Set to 0 to permanently exclude debug modules from production builds
+ * - Set to 0 for unused modules to reduce binary size
+ * - Keep at 1 for modules that need runtime control
+ *
+ * Configuration priority:
+ *   1. Command line: -DWW_LOG_STATIC_MODULE_DEMO_EN=0
+ *   2. ww_log_config.h or build system
+ *   3. Default: 1 (enabled) if not defined
+ *
+ * Example:
+ *   // In Makefile or build config
+ *   CFLAGS += -DWW_LOG_STATIC_MODULE_TEST_EN=0    # Exclude TEST module
+ *   CFLAGS += -DWW_LOG_STATIC_MODULE_DRIVERS_EN=0 # Exclude DRIVERS module
+ */
+
+#ifndef WW_LOG_STATIC_MODULE_DEFAULT_EN
+#define WW_LOG_STATIC_MODULE_DEFAULT_EN   1  /**< DEFAULT module static switch */
+#endif
+
+#ifndef WW_LOG_STATIC_MODULE_DEMO_EN
+#define WW_LOG_STATIC_MODULE_DEMO_EN      1  /**< DEMO module static switch */
+#endif
+
+#ifndef WW_LOG_STATIC_MODULE_TEST_EN
+#define WW_LOG_STATIC_MODULE_TEST_EN      1  /**< TEST module static switch */
+#endif
+
+#ifndef WW_LOG_STATIC_MODULE_APP_EN
+#define WW_LOG_STATIC_MODULE_APP_EN       1  /**< APP module static switch */
+#endif
+
+#ifndef WW_LOG_STATIC_MODULE_DRIVERS_EN
+#define WW_LOG_STATIC_MODULE_DRIVERS_EN   1  /**< DRIVERS module static switch */
+#endif
+
+#ifndef WW_LOG_STATIC_MODULE_BROM_EN
+#define WW_LOG_STATIC_MODULE_BROM_EN      1  /**< BROM module static switch */
+#endif
+
+/**
+ * Module ID to static switch mapping
+ * Used by LOG macros to check compile-time enable status
+ */
+#define WW_LOG_STATIC_ENABLED_0  WW_LOG_STATIC_MODULE_DEFAULT_EN
+#define WW_LOG_STATIC_ENABLED_1  WW_LOG_STATIC_MODULE_DEMO_EN
+#define WW_LOG_STATIC_ENABLED_2  WW_LOG_STATIC_MODULE_TEST_EN
+#define WW_LOG_STATIC_ENABLED_3  WW_LOG_STATIC_MODULE_APP_EN
+#define WW_LOG_STATIC_ENABLED_4  WW_LOG_STATIC_MODULE_DRIVERS_EN
+#define WW_LOG_STATIC_ENABLED_5  WW_LOG_STATIC_MODULE_BROM_EN
+
+/**
+ * Static switch check macro with two-level expansion
+ * This allows module_id to be a macro that expands to a number
+ *
+ * Example expansion:
+ *   WW_LOG_STATIC_CHECK(WW_LOG_MODULE_DEMO)
+ *   → WW_LOG_STATIC_CHECK(1)
+ *   → WW_LOG_STATIC_ENABLED_1
+ *   → WW_LOG_STATIC_MODULE_DEMO_EN
+ *   → 1 (or 0 if disabled)
+ */
+#define WW_LOG_STATIC_CHECK(module_id)  _WW_LOG_STATIC_CHECK_IMPL(module_id)
+#define _WW_LOG_STATIC_CHECK_IMPL(id)   WW_LOG_STATIC_ENABLED_##id
+
 /* ========== Dynamic Module Mask ========== */
 
 /**
