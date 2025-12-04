@@ -115,4 +115,30 @@ void ww_log_disable_module(U8 module_id);
  */
 U8 ww_log_is_module_enabled(U8 module_id);
 
+/* ========== Level Threshold Control ========== */
+
+/**
+ * Global log level threshold (runtime configurable)
+ * Logs with level > threshold will be filtered out
+ * Default: WW_LOG_LEVEL_DBG (allow all)
+ */
+extern U8 g_ww_log_level_threshold;
+
+/**
+ * @brief Set global log level threshold
+ * @param level New threshold (WW_LOG_LEVEL_ERR/WRN/INF/DBG)
+ *
+ * Examples:
+ *   ww_log_set_level_threshold(WW_LOG_LEVEL_ERR);  // Only errors
+ *   ww_log_set_level_threshold(WW_LOG_LEVEL_WRN);  // Errors + warnings
+ *   ww_log_set_level_threshold(WW_LOG_LEVEL_DBG);  // All logs
+ */
+void ww_log_set_level_threshold(U8 level);
+
+/**
+ * @brief Get current log level threshold
+ * @return Current threshold value
+ */
+U8 ww_log_get_level_threshold(void);
+
 #endif /* WW_LOG_MODULES_H */

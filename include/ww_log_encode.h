@@ -1,12 +1,12 @@
 /**
  * @file ww_log_encode.h
- * @brief Encode mode logging implementation
- * @date 2025-11-29
+ * @brief Encode mode logging implementation (refactored for minimal code size)
+ * @date 2025-12-04
  *
  * Encode mode features:
  * - Binary encoding for minimal code size
- * - No format strings stored in ROM
- * - Encoding format: 32-bit header + parameter values
+ * - No format strings stored in ROM (fmt parameter is discarded)
+ * - All filtering done in function to minimize macro expansion
  *
  * Encoding Layout (32 bits):
  * ┌─────────────┬─────────────┬──────────────┬────────┐
@@ -21,27 +21,10 @@
  * - DATA_LEN: Number of data parameters (0-63, currently support 0-8)
  * - LEVEL: Log level (ERR=0, WRN=1, INF=2, DBG=3)
  *
- * Output format:
- *   0x08302732 0x00000050 0x000000AB
- *   ^header    ^param1   ^param2
- *
- * Usage in module internal header (e.g., brom_in.h):
- *   #define CURRENT_MODULE_BASE   WW_LOG_DIR_BROM_BASE
- *   #ifndef CURRENT_FILE_OFFSET
- *   #define CURRENT_FILE_OFFSET   0
- *   #endif
- *   #define CURRENT_LOG_ID        (CURRENT_MODULE_BASE + CURRENT_FILE_OFFSET)
- *
- * Usage in source file:
- *   // Normal file (uses default offset 0)
- *   #include "brom_in.h"
- *   LOG_INF();  // Encoded as: LOG_ID=160, LINE=__LINE__, LEVEL=2, PARAM_CNT=0
- *
- *   // File with custom offset and parameters
- *   #define CURRENT_FILE_OFFSET  BROM_FILE_FLASH  // Defined in brom_in.h
- *   #include "brom_in.h"
- *   LOG_DBG(tag, "val=%d", 123);  // Encoded as: LOG_ID=163, LINE=__LINE__, LEVEL=3, PARAM_CNT=1
- *                                  // Output: 0xA3xxxxxy 0x0000007B (where y=1)
+ * Code Size Optimization:
+ * - All filtering (module mask, level threshold) is done inside function
+ * - Macro only packs parameters and calls function - minimal expansion
+ * - fmt string is completely ignored (not compiled into binary)
  */
 
 #ifndef WW_LOG_ENCODE_H
@@ -56,10 +39,6 @@
  * Extract module ID from LOG_ID
  * Since each module reserves 32 slots (DIR_BASE = module_id << 5),
  * we can extract module_id by shifting right by 5 bits
- *
- * Example:
- *   LOG_ID = 161 (BROM_BASE + 1)
- *   module_id = 161 >> 5 = 5 (WW_LOG_MODULE_BROM)
  */
 #define WW_LOG_GET_MODULE_ID(log_id)  ((log_id) >> 5)
 
@@ -67,11 +46,6 @@
 
 /**
  * Encode a log entry into 32-bit format
- * @param log_id Module/file identifier (12 bits, 0-4095)
- * @param line Line number (12 bits, 0-4095)
- * @param data_len Number of data parameters (6 bits, 0-63)
- * @param level Log level (2 bits, 0-3: ERR/WRN/INF/DBG)
- * @return 32-bit encoded value
  */
 #define WW_LOG_ENCODE(log_id, line, data_len, level) \
     ((U32)( \
@@ -92,238 +66,132 @@
 /* ========== Output Function Declaration ========== */
 
 /**
- * @brief Core encode mode output function
- * @param encoded_log 32-bit encoded log entry (contains LOG_ID, LINE, LEVEL, PARAM_CNT)
- * @param params Array of parameter values (each as U32)
+ * @brief Core encode mode output function (with internal filtering)
+ * @param log_id Module/file identifier (12 bits, 0-4095)
+ * @param line Source line number
+ * @param level Log level (0-3)
+ * @param params Array of parameter values (each as U32), NULL if no params
  * @param param_count Number of parameters (0-8)
  *
- * This function outputs the encoded log to the configured target:
- * - UART (real-time output): prints header + all params
- * - RAM buffer (circular buffer for history)
- * - External storage (optional)
+ * This function performs all filtering internally:
+ * - Module enable check (via g_ww_log_module_mask)
+ * - Level threshold check (via g_ww_log_level_threshold)
  *
- * Output format: 0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ...
+ * Only outputs if both checks pass.
  */
-void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count);
+void ww_log_encode_output(U16 log_id, U16 line, U8 level,
+                          const U32 *params, U8 param_count);
 
 /* ========== Argument Counting for Variadic Macros ========== */
 
 /**
- * Count number of variadic arguments
- * This counts ALL arguments passed to the macro
- * Supports 1-10 arguments
+ * Count number of variadic arguments (supports 0-10)
+ * Note: This counts ALL arguments after fmt
  */
-#define _WW_LOG_NARG(...) \
-    _WW_LOG_NARG_IMPL(__VA_ARGS__, 10,9,8,7,6,5,4,3,2,1)
+#define _WW_LOG_ARG_COUNT(...) \
+    _WW_LOG_ARG_COUNT_IMPL(0, ##__VA_ARGS__, 10,9,8,7,6,5,4,3,2,1,0)
 
-#define _WW_LOG_NARG_IMPL(_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,N,...) N
+#define _WW_LOG_ARG_COUNT_IMPL(_0,_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,N,...) N
+
+/* ========== Internal Helper Macros ========== */
 
 /**
- * Subtract 2 from argument count to get data parameter count
- * Used to convert total args (module_tag + fmt + data params) to just data param count
+ * Helper to create parameter array
+ * For 0 params: pass NULL
+ * For 1+ params: create array on stack
  */
-#define _WW_LOG_DATA_PARAM_COUNT(...) \
-    _WW_LOG_SUBTRACT_2(_WW_LOG_NARG(__VA_ARGS__))
+#define _WW_LOG_ENCODE_CALL_0(log_id, line, level) \
+    ww_log_encode_output((log_id), (line), (level), (const U32*)0, 0)
 
-#define _WW_LOG_SUBTRACT_2(n) _WW_LOG_SUBTRACT_2_IMPL(n)
-#define _WW_LOG_SUBTRACT_2_IMPL(n) _WW_LOG_SUBTRACT_2_##n
-#define _WW_LOG_SUBTRACT_2_10  8
-#define _WW_LOG_SUBTRACT_2_9   7
-#define _WW_LOG_SUBTRACT_2_8   6
-#define _WW_LOG_SUBTRACT_2_7   5
-#define _WW_LOG_SUBTRACT_2_6   4
-#define _WW_LOG_SUBTRACT_2_5   3
-#define _WW_LOG_SUBTRACT_2_4   2
-#define _WW_LOG_SUBTRACT_2_3   1
-#define _WW_LOG_SUBTRACT_2_2   0
-
-/* ========== Internal Macro Implementations ========== */
-
-/**
- * Internal encode macros - macro name = number of DATA parameters
- *
- * All macros require (module_tag, fmt, ...) parameters:
- *   _LOG_ENCODE_0: (module_tag, "msg")                      - 0 data params
- *   _LOG_ENCODE_1: (module_tag, "msg", p1)                  - 1 data param
- *   _LOG_ENCODE_2: (module_tag, "msg", p1, p2)              - 2 data params
- *   ...
- *   _LOG_ENCODE_8: (module_tag, "msg", p1, p2, ..., p8)     - 8 data params (max)
- *
- * This naming scheme is intuitive: the number directly indicates data parameter count.
- */
-
-/* 0 data params: module + message only */
-#define _LOG_ENCODE_0(level, module_tag, fmt) \
+#define _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, ...) \
     do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 0, level); \
-            ww_log_encode_output(_encoded, (const U32*)0, 0); \
-        } \
-    } while(0)
-
-/* 1 data param */
-#define _LOG_ENCODE_1(level, module_tag, fmt, p1) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _params[] = {(U32)(p1)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 1, level); \
-            ww_log_encode_output(_encoded, _params, 1); \
-        } \
-    } while(0)
-
-/* 2 data params */
-#define _LOG_ENCODE_2(level, module_tag, fmt, p1, p2) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _params[] = {(U32)(p1), (U32)(p2)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 2, level); \
-            ww_log_encode_output(_encoded, _params, 2); \
-        } \
-    } while(0)
-
-/* 3 data params */
-#define _LOG_ENCODE_3(level, module_tag, fmt, p1, p2, p3) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 3, level); \
-            ww_log_encode_output(_encoded, _params, 3); \
-        } \
-    } while(0)
-
-/* 4 data params */
-#define _LOG_ENCODE_4(level, module_tag, fmt, p1, p2, p3, p4) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 4, level); \
-            ww_log_encode_output(_encoded, _params, 4); \
-        } \
-    } while(0)
-
-/* 5 data params */
-#define _LOG_ENCODE_5(level, module_tag, fmt, p1, p2, p3, p4, p5) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4), (U32)(p5)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 5, level); \
-            ww_log_encode_output(_encoded, _params, 5); \
-        } \
-    } while(0)
-
-/* 6 data params */
-#define _LOG_ENCODE_6(level, module_tag, fmt, p1, p2, p3, p4, p5, p6) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4), (U32)(p5), (U32)(p6)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 6, level); \
-            ww_log_encode_output(_encoded, _params, 6); \
-        } \
-    } while(0)
-
-/* 7 data params */
-#define _LOG_ENCODE_7(level, module_tag, fmt, p1, p2, p3, p4, p5, p6, p7) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4), (U32)(p5), (U32)(p6), (U32)(p7)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 7, level); \
-            ww_log_encode_output(_encoded, _params, 7); \
-        } \
-    } while(0)
-
-/* 8 data params (maximum supported) */
-#define _LOG_ENCODE_8(level, module_tag, fmt, p1, p2, p3, p4, p5, p6, p7, p8) \
-    do { \
-        U8 _module_id = WW_LOG_GET_MODULE_ID(CURRENT_LOG_ID); \
-        if (WW_LOG_MODULE_ENABLED(_module_id) && (WW_LOG_LEVEL_THRESHOLD >= level)) { \
-            (void)module_tag; \
-            U32 _params[] = {(U32)(p1), (U32)(p2), (U32)(p3), (U32)(p4), (U32)(p5), (U32)(p6), (U32)(p7), (U32)(p8)}; \
-            U32 _encoded = WW_LOG_ENCODE(CURRENT_LOG_ID, __LINE__, 8, level); \
-            ww_log_encode_output(_encoded, _params, 8); \
-        } \
+        U32 _params[] = {__VA_ARGS__}; \
+        ww_log_encode_output((log_id), (line), (level), _params, (count)); \
     } while(0)
 
 /**
- * Macro concatenation helpers (need double expansion for correct behavior)
+ * Dispatch macro: choose between 0-param and N-param versions
  */
-#define _WW_LOG_CONCAT(a, b) _WW_LOG_CONCAT_IMPL(a, b)
-#define _WW_LOG_CONCAT_IMPL(a, b) a##b
+#define _WW_LOG_ENCODE_DISPATCH(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_SELECT(count)(log_id, line, level, count, ##__VA_ARGS__)
 
-/**
- * Dispatcher macro to select correct _LOG_ENCODE_N based on data parameter count
- * Note: We subtract 2 from total arg count because module_tag and fmt are not data params
- */
-#define _LOG_ENCODE_DISPATCH(level, ...) \
-    _WW_LOG_CONCAT(_LOG_ENCODE_, _WW_LOG_DATA_PARAM_COUNT(__VA_ARGS__))(level, __VA_ARGS__)
+#define _WW_LOG_ENCODE_SELECT(count) _WW_LOG_ENCODE_SELECT_IMPL(count)
+#define _WW_LOG_ENCODE_SELECT_IMPL(count) _WW_LOG_ENCODE_##count
+
+/* Select between 0-param call and N-param call */
+#define _WW_LOG_ENCODE_0(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_0(log_id, line, level)
+
+#define _WW_LOG_ENCODE_1(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
+#define _WW_LOG_ENCODE_2(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
+#define _WW_LOG_ENCODE_3(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
+#define _WW_LOG_ENCODE_4(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
+#define _WW_LOG_ENCODE_5(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
+#define _WW_LOG_ENCODE_6(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
+#define _WW_LOG_ENCODE_7(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
+#define _WW_LOG_ENCODE_8(log_id, line, level, count, ...) \
+    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
 
 /* ========== Public API Macros ========== */
 
 /**
  * Public logging macros for encode mode
- * These macros count the number of parameters and dispatch to appropriate handler
+ *
+ * IMPORTANT: The 'tag' and 'fmt' parameters are COMPLETELY IGNORED
+ * in encode mode - they are NOT compiled into the binary!
  *
  * Usage:
- *   LOG_ERR(tag, "message")              -> 0 data params -> _LOG_ENCODE_0
- *   LOG_INF(tag, "val=%d", 123)          -> 1 data param  -> _LOG_ENCODE_1
- *   LOG_DBG(tag, "x=%d y=%d", 10, 20)    -> 2 data params -> _LOG_ENCODE_2
+ *   LOG_ERR(tag, "message")              -> outputs encoded log, 0 params
+ *   LOG_INF(tag, "val=%d", 123)          -> outputs encoded log, 1 param
+ *   LOG_DBG(tag, "x=%d y=%d", 10, 20)    -> outputs encoded log, 2 params
+ *
+ * Macro expansion is minimal:
+ *   - Only creates param array (if needed) and calls function
+ *   - All filtering is done inside function
+ *   - fmt string is discarded (not in binary)
  */
-#define LOG_ERR(...) _LOG_ENCODE_DISPATCH(WW_LOG_LEVEL_ERR, __VA_ARGS__)
-#define LOG_WRN(...) _LOG_ENCODE_DISPATCH(WW_LOG_LEVEL_WRN, __VA_ARGS__)
-#define LOG_INF(...) _LOG_ENCODE_DISPATCH(WW_LOG_LEVEL_INF, __VA_ARGS__)
-#define LOG_DBG(...) _LOG_ENCODE_DISPATCH(WW_LOG_LEVEL_DBG, __VA_ARGS__)
+#define LOG_ERR(tag, fmt, ...) \
+    _WW_LOG_ENCODE_DISPATCH(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_ERR, \
+                            _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+
+#define LOG_WRN(tag, fmt, ...) \
+    _WW_LOG_ENCODE_DISPATCH(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_WRN, \
+                            _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+
+#define LOG_INF(tag, fmt, ...) \
+    _WW_LOG_ENCODE_DISPATCH(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_INF, \
+                            _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+
+#define LOG_DBG(tag, fmt, ...) \
+    _WW_LOG_ENCODE_DISPATCH(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_DBG, \
+                            _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 /* ========== RAM Buffer (Optional) ========== */
 
-/**
- * RAM buffer configuration
- * Enable this to store encoded logs in a circular buffer
- */
 #ifdef WW_LOG_ENCODE_RAM_BUFFER_EN
 
 #ifndef WW_LOG_RAM_BUFFER_SIZE
-#define WW_LOG_RAM_BUFFER_SIZE  128  /* Number of 32-bit entries */
+#define WW_LOG_RAM_BUFFER_SIZE  128
 #endif
 
-/**
- * Circular buffer structure
- */
 typedef struct {
-    U32 magic;                              /* Magic number for warm restart detection */
-    U16 head;                               /* Read pointer */
-    U16 tail;                               /* Write pointer */
-    U32 entries[WW_LOG_RAM_BUFFER_SIZE];   /* Log data */
+    U32 magic;
+    U16 head;
+    U16 tail;
+    U32 entries[WW_LOG_RAM_BUFFER_SIZE];
 } WW_LOG_RAM_BUFFER_T;
 
-/**
- * Magic number for warm restart detection
- * ASCII: "WLOG" = 0x574C4F47
- */
 #define WW_LOG_RAM_MAGIC  0x574C4F47
 
-/**
- * Global RAM buffer instance
- */
 extern WW_LOG_RAM_BUFFER_T g_ww_log_ram_buffer;
 
-/**
- * RAM buffer API
- */
 U16 ww_log_ram_get_count(void);
 void ww_log_ram_dump(void);
 void ww_log_ram_clear(void);

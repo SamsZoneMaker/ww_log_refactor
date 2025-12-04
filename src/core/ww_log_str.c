@@ -1,7 +1,10 @@
 /**
  * @file ww_log_str.c
- * @brief String mode logging implementation (refactored)
+ * @brief String mode logging implementation (refactored for minimal code size)
  * @date 2025-12-01
+ *
+ * All filtering logic (module mask, level threshold) is performed inside
+ * the output function to minimize code size at each call site.
  */
 
 #include "ww_log.h"
@@ -22,22 +25,37 @@ static const char* level_names[] = {
 };
 
 /**
- * @brief Core string mode output function (refactored)
+ * @brief Core string mode output function (with internal filtering)
+ * @param module_id Module ID for filtering (0-31)
  * @param filename Source filename (without path)
  * @param line Line number
  * @param level Log level (0-3)
  * @param fmt Printf-style format string
  * @param ... Variable arguments
  *
+ * This function performs all checks internally:
+ * 1. Module enable check (via g_ww_log_module_mask)
+ * 2. Level threshold check (via g_ww_log_level_threshold)
+ *
  * Output format: [LEVEL] filename:line - message
  * Example: [INF] brom_boot.c:42 - Boot sequence started
  */
-void ww_log_str_output(const char *filename, U32 line, U8 level,
+void ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
                        const char *fmt, ...)
 {
     va_list args;
 
-    /* Validate level */
+    /* Check module enable (dynamic switch) */
+    if ((g_ww_log_module_mask & (1U << module_id)) == 0) {
+        return;
+    }
+
+    /* Check level threshold (dynamic switch) */
+    if (level > g_ww_log_level_threshold) {
+        return;
+    }
+
+    /* Validate level for array access */
     if (level > WW_LOG_LEVEL_DBG) {
         level = WW_LOG_LEVEL_DBG;
     }

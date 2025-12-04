@@ -89,7 +89,7 @@ int main(void)
     printf("  Mode: DEFAULT (STRING)\n");
 #endif
 
-    printf("  Log Level Threshold: %d\n", WW_LOG_LEVEL_THRESHOLD);
+    printf("  Log Level Threshold: %d (runtime configurable)\n", ww_log_get_level_threshold());
     printf("=======================================\n\n");
 
     /* Initialize log system */

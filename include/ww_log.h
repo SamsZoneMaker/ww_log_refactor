@@ -22,7 +22,7 @@
 #include "ww_log_config.h"
 
 /**
- * Log level definitions (using macros for compile-time comparison)
+ * Log level definitions
  */
 #define WW_LOG_LEVEL_ERR  0  /* Error: system failures, critical issues */
 #define WW_LOG_LEVEL_WRN  1  /* Warning: potential problems */
@@ -30,13 +30,13 @@
 #define WW_LOG_LEVEL_DBG  3  /* Debug: detailed execution flow */
 
 /**
- * Global compile-time log level threshold
- * Logs below this level will be compiled out
- * Define this in your build system or use default
+ * Log level threshold is now RUNTIME configurable (not compile-time)
+ * Use these APIs to control log level at runtime:
+ *   ww_log_set_level_threshold(WW_LOG_LEVEL_WRN);  // Only ERR and WRN
+ *   ww_log_set_level_threshold(WW_LOG_LEVEL_DBG);  // All logs (default)
+ *
+ * See ww_log_modules.h for API declarations.
  */
-#ifndef WW_LOG_LEVEL_THRESHOLD
-#define WW_LOG_LEVEL_THRESHOLD  WW_LOG_LEVEL_DBG  /* Default: allow all */
-#endif
 
 /**
  * Mode selection: Choose one of the following

@@ -45,16 +45,21 @@
 /* ========== Output Function Declaration ========== */
 
 /**
- * @brief Core string mode output function
+ * @brief Core string mode output function (with internal filtering)
+ * @param module_id Module ID for filtering (0-31)
  * @param filename Source filename (extracted from __FILE__)
  * @param line Line number
  * @param level Log level (WW_LOG_LEVEL_ERR/WRN/INF/DBG)
  * @param fmt Printf-style format string
  * @param ... Variable arguments for format string
  *
+ * This function performs all filtering checks internally:
+ * - Module enable/disable check (via g_ww_log_module_mask)
+ * - Log level threshold check (via g_ww_log_level_threshold)
+ *
  * Output format: [LEVEL] filename:line - formatted_message
  */
-void ww_log_str_output(const char *filename, U32 line, U8 level,
+void ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
                        const char *fmt, ...);
 
 /* ========== Public Log Macros ========== */
@@ -64,56 +69,34 @@ void ww_log_str_output(const char *filename, U32 line, U8 level,
  * @param module_id Module ID (0-31, see ww_log_modules.h)
  * @param fmt Printf-style format string
  * @param ... Format arguments (optional)
+ *
+ * All filtering (module mask, level threshold) is done inside the function
+ * to minimize code size at each call site.
  */
 #define LOG_ERR(module_id, fmt, ...) \
-    do { \
-        if (WW_LOG_MODULE_ENABLED(module_id) && (WW_LOG_LEVEL_THRESHOLD >= WW_LOG_LEVEL_ERR)) { \
-            ww_log_str_output(_WW_LOG_FILENAME(__FILE__), __LINE__, WW_LOG_LEVEL_ERR, \
-                             fmt, ##__VA_ARGS__); \
-        } \
-    } while(0)
+    ww_log_str_output((module_id), _WW_LOG_FILENAME(__FILE__), __LINE__, \
+                      WW_LOG_LEVEL_ERR, fmt, ##__VA_ARGS__)
 
 /**
  * LOG_WRN - Warning level logging
- * @param module_id Module ID (0-31, see ww_log_modules.h)
- * @param fmt Printf-style format string
- * @param ... Format arguments (optional)
  */
 #define LOG_WRN(module_id, fmt, ...) \
-    do { \
-        if (WW_LOG_MODULE_ENABLED(module_id) && (WW_LOG_LEVEL_THRESHOLD >= WW_LOG_LEVEL_WRN)) { \
-            ww_log_str_output(_WW_LOG_FILENAME(__FILE__), __LINE__, WW_LOG_LEVEL_WRN, \
-                             fmt, ##__VA_ARGS__); \
-        } \
-    } while(0)
+    ww_log_str_output((module_id), _WW_LOG_FILENAME(__FILE__), __LINE__, \
+                      WW_LOG_LEVEL_WRN, fmt, ##__VA_ARGS__)
 
 /**
  * LOG_INF - Info level logging
- * @param module_id Module ID (0-31, see ww_log_modules.h)
- * @param fmt Printf-style format string
- * @param ... Format arguments (optional)
  */
 #define LOG_INF(module_id, fmt, ...) \
-    do { \
-        if (WW_LOG_MODULE_ENABLED(module_id) && (WW_LOG_LEVEL_THRESHOLD >= WW_LOG_LEVEL_INF)) { \
-            ww_log_str_output(_WW_LOG_FILENAME(__FILE__), __LINE__, WW_LOG_LEVEL_INF, \
-                             fmt, ##__VA_ARGS__); \
-        } \
-    } while(0)
+    ww_log_str_output((module_id), _WW_LOG_FILENAME(__FILE__), __LINE__, \
+                      WW_LOG_LEVEL_INF, fmt, ##__VA_ARGS__)
 
 /**
  * LOG_DBG - Debug level logging
- * @param module_id Module ID (0-31, see ww_log_modules.h)
- * @param fmt Printf-style format string
- * @param ... Format arguments (optional)
  */
 #define LOG_DBG(module_id, fmt, ...) \
-    do { \
-        if (WW_LOG_MODULE_ENABLED(module_id) && (WW_LOG_LEVEL_THRESHOLD >= WW_LOG_LEVEL_DBG)) { \
-            ww_log_str_output(_WW_LOG_FILENAME(__FILE__), __LINE__, WW_LOG_LEVEL_DBG, \
-                             fmt, ##__VA_ARGS__); \
-        } \
-    } while(0)
+    ww_log_str_output((module_id), _WW_LOG_FILENAME(__FILE__), __LINE__, \
+                      WW_LOG_LEVEL_DBG, fmt, ##__VA_ARGS__)
 
 /* ========== Convenience Macros (Optional) ========== */
 

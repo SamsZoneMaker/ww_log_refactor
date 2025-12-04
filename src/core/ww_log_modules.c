@@ -62,3 +62,29 @@ U8 ww_log_is_module_enabled(U8 module_id)
     }
     return (g_ww_log_module_mask & (1U << module_id)) ? 1 : 0;
 }
+
+/* ========== Level Threshold Control ========== */
+
+/**
+ * Global log level threshold
+ * Default: WW_LOG_LEVEL_DBG (3) = allow all logs
+ */
+U8 g_ww_log_level_threshold = 3;  /* WW_LOG_LEVEL_DBG */
+
+/**
+ * @brief Set global log level threshold
+ */
+void ww_log_set_level_threshold(U8 level)
+{
+    if (level <= 3) {  /* WW_LOG_LEVEL_DBG */
+        g_ww_log_level_threshold = level;
+    }
+}
+
+/**
+ * @brief Get current log level threshold
+ */
+U8 ww_log_get_level_threshold(void)
+{
+    return g_ww_log_level_threshold;
+}

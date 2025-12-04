@@ -7,10 +7,16 @@
  * - Module base ID configuration
  * - File offset enumeration (for fine-grained file differentiation)
  * - Current log ID calculation
+ * - Static switch for compile-time log removal
+ *
+ * Static Switch Usage:
+ *   Define WW_LOG_MODULE_DEMO_EN in your build system to enable DEMO logs.
+ *   If not defined, all DEMO_LOG_xxx macros compile to nothing.
  *
  * Usage:
  *   // Normal file (uses default offset 0)
  *   #include "demo_in.h"
+ *   DEMO_LOG_INF("Hello");  // Uses module-specific macro
  *
  *   // File with custom offset (for differentiation)
  *   #define CURRENT_FILE_OFFSET  DEMO_FILE_INIT
@@ -78,6 +84,41 @@ typedef enum {
  * Calculated as: MODULE_BASE + FILE_OFFSET
  */
 #define CURRENT_LOG_ID        (CURRENT_MODULE_BASE + CURRENT_FILE_OFFSET)
+
+/* ========== Module Static Switch ========== */
+
+/**
+ * Static switch for DEMO module logs
+ *
+ * When WW_LOG_MODULE_DEMO_EN is defined:
+ *   - DEMO_LOG_xxx macros expand to normal LOG_xxx calls
+ *   - Log code is compiled into the binary
+ *
+ * When WW_LOG_MODULE_DEMO_EN is NOT defined:
+ *   - DEMO_LOG_xxx macros expand to nothing (do{}while(0))
+ *   - No log code is compiled - zero code size overhead
+ *
+ * Define WW_LOG_MODULE_DEMO_EN in:
+ *   - Makefile: -DWW_LOG_MODULE_DEMO_EN
+ *   - Or in a project-wide config header
+ */
+#ifdef WW_LOG_MODULE_DEMO_EN
+
+    /* DEMO logs enabled - use normal LOG macros with module ID */
+    #define DEMO_LOG_ERR(fmt, ...)  LOG_ERR(CURRENT_MODULE_ID, fmt, ##__VA_ARGS__)
+    #define DEMO_LOG_WRN(fmt, ...)  LOG_WRN(CURRENT_MODULE_ID, fmt, ##__VA_ARGS__)
+    #define DEMO_LOG_INF(fmt, ...)  LOG_INF(CURRENT_MODULE_ID, fmt, ##__VA_ARGS__)
+    #define DEMO_LOG_DBG(fmt, ...)  LOG_DBG(CURRENT_MODULE_ID, fmt, ##__VA_ARGS__)
+
+#else
+
+    /* DEMO logs disabled - compile to nothing */
+    #define DEMO_LOG_ERR(fmt, ...)  do { } while(0)
+    #define DEMO_LOG_WRN(fmt, ...)  do { } while(0)
+    #define DEMO_LOG_INF(fmt, ...)  do { } while(0)
+    #define DEMO_LOG_DBG(fmt, ...)  do { } while(0)
+
+#endif /* WW_LOG_MODULE_DEMO_EN */
 
 /* ========== Module API (if needed) ========== */
 

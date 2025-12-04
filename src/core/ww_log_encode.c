@@ -132,17 +132,44 @@ void ww_log_ram_clear(void)
 /* ========== Core Encoding Function ========== */
 
 /**
- * @brief Core encode mode output function
- * @param encoded_log 32-bit encoded log entry (contains LOG_ID, LINE, LEVEL, PARAM_CNT)
- * @param params Array of parameter values (each as U32)
+ * @brief Core encode mode output function (with internal filtering)
+ * @param log_id Module/file identifier (12 bits, 0-4095)
+ * @param line Source line number
+ * @param level Log level (0-3)
+ * @param params Array of parameter values (each as U32), NULL if no params
  * @param param_count Number of parameters (0-8)
  *
- * This function:
- * 1. Outputs to RAM buffer (if enabled): stores header + all params
- * 2. Outputs to UART as hex: prints "0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ...\n"
+ * This function performs all filtering internally to minimize code size
+ * at each call site. Filtering checks:
+ * 1. Module enable check (via g_ww_log_module_mask)
+ * 2. Level threshold check (via g_ww_log_level_threshold)
+ *
+ * Output:
+ * - RAM buffer (if enabled): stores header + all params
+ * - UART: prints "0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ...\n"
  */
-void ww_log_encode_output(U32 encoded_log, const U32 *params, U8 param_count)
+void ww_log_encode_output(U16 log_id, U16 line, U8 level,
+                          const U32 *params, U8 param_count)
 {
+    U32 encoded_log;
+    U8 module_id;
+
+    /* Extract module ID from log_id (log_id >> 5) */
+    module_id = (U8)(log_id >> 5);
+
+    /* Check module enable (dynamic switch) */
+    if ((g_ww_log_module_mask & (1U << module_id)) == 0) {
+        return;
+    }
+
+    /* Check level threshold (dynamic switch) */
+    if (level > g_ww_log_level_threshold) {
+        return;
+    }
+
+    /* Encode the log entry */
+    encoded_log = WW_LOG_ENCODE(log_id, line, param_count, level);
+
 #ifdef WW_LOG_ENCODE_RAM_BUFFER_EN
     /* Write header to RAM buffer */
     ww_log_ram_write(encoded_log);
