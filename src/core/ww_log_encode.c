@@ -1,11 +1,12 @@
 /**
  * @file ww_log_encode.c
- * @brief Encode mode logging implementation
- * @date 2025-11-29
+ * @brief Encode mode logging implementation (variadic function version)
+ * @date 2025-12-04
  */
 
 #include "ww_log.h"
 #include <stdio.h>
+#include <stdarg.h>
 
 #ifdef WW_LOG_MODE_ENCODE
 
@@ -132,27 +133,29 @@ void ww_log_ram_clear(void)
 /* ========== Core Encoding Function ========== */
 
 /**
- * @brief Core encode mode output function (with internal filtering)
+ * @brief Core encode mode output function (variadic version)
  * @param log_id Module/file identifier (12 bits, 0-4095)
  * @param line Source line number
  * @param level Log level (0-3)
- * @param params Array of parameter values (each as U32), NULL if no params
- * @param param_count Number of parameters (0-8)
+ * @param param_count Number of parameters (0-16)
+ * @param ... Variable parameters (each as U32)
  *
  * This function performs all filtering internally to minimize code size
  * at each call site. Filtering checks:
  * 1. Module enable check (via g_ww_log_module_mask)
  * 2. Level threshold check (via g_ww_log_level_threshold)
  *
- * Output:
- * - RAM buffer (if enabled): stores header + all params
- * - UART: prints "0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ...\n"
+ * Parameters are extracted via va_list and stored in a local array,
+ * then used for both RAM buffer and UART output.
  */
 void ww_log_encode_output(U16 log_id, U16 line, U8 level,
-                          const U32 *params, U8 param_count)
+                          U8 param_count, ...)
 {
     U32 encoded_log;
     U8 module_id;
+    va_list args;
+    U32 params[16];  /* Support up to 16 parameters */
+    U8 i;
 
     /* Extract module ID from log_id (log_id >> 5) */
     module_id = (U8)(log_id >> 5);
@@ -167,6 +170,20 @@ void ww_log_encode_output(U16 log_id, U16 line, U8 level,
         return;
     }
 
+    /* Limit param_count for safety */
+    if (param_count > 16) {
+        param_count = 16;
+    }
+
+    /* Extract variadic parameters into array */
+    if (param_count > 0) {
+        va_start(args, param_count);
+        for (i = 0; i < param_count; i++) {
+            params[i] = va_arg(args, U32);
+        }
+        va_end(args);
+    }
+
     /* Encode the log entry */
     encoded_log = WW_LOG_ENCODE(log_id, line, param_count, level);
 
@@ -175,7 +192,7 @@ void ww_log_encode_output(U16 log_id, U16 line, U8 level,
     ww_log_ram_write(encoded_log);
 
     /* Write all parameters to RAM buffer */
-    for (U8 i = 0; i < param_count; i++) {
+    for (i = 0; i < param_count; i++) {
         ww_log_ram_write(params[i]);
     }
 #endif
@@ -185,7 +202,7 @@ void ww_log_encode_output(U16 log_id, U16 line, U8 level,
     printf("0x%08X", encoded_log);
 
     /* Print all parameters */
-    for (U8 i = 0; i < param_count; i++) {
+    for (i = 0; i < param_count; i++) {
         printf(" 0x%08X", params[i]);
     }
 

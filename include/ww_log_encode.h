@@ -1,12 +1,13 @@
 /**
  * @file ww_log_encode.h
- * @brief Encode mode logging implementation (refactored for minimal code size)
+ * @brief Encode mode logging implementation (variadic function version)
  * @date 2025-12-04
  *
  * Encode mode features:
  * - Binary encoding for minimal code size
  * - No format strings stored in ROM (fmt parameter is discarded)
- * - All filtering done in function to minimize macro expansion
+ * - Variadic function for minimal macro expansion
+ * - All filtering done in function
  *
  * Encoding Layout (32 bits):
  * ┌─────────────┬─────────────┬──────────────┬────────┐
@@ -15,16 +16,10 @@
  * │ 31       20 │ 19        8 │ 7          2 │ 1    0 │
  * └─────────────┴─────────────┴──────────────┴────────┘
  *
- * Where:
- * - LOG_ID: Module base ID + file offset (from CURRENT_LOG_ID)
- * - LINE: Source line number (__LINE__)
- * - DATA_LEN: Number of data parameters (0-63, currently support 0-8)
- * - LEVEL: Log level (ERR=0, WRN=1, INF=2, DBG=3)
- *
  * Code Size Optimization:
- * - All filtering (module mask, level threshold) is done inside function
- * - Macro only packs parameters and calls function - minimal expansion
- * - fmt string is completely ignored (not compiled into binary)
+ * - Macro expansion is just a single function call
+ * - No stack array creation at call site
+ * - All filtering and parameter extraction done inside function
  */
 
 #ifndef WW_LOG_ENCODE_H
@@ -66,67 +61,35 @@
 /* ========== Output Function Declaration ========== */
 
 /**
- * @brief Core encode mode output function (with internal filtering)
+ * @brief Core encode mode output function (variadic version)
  * @param log_id Module/file identifier (12 bits, 0-4095)
  * @param line Source line number
  * @param level Log level (0-3)
- * @param params Array of parameter values (each as U32), NULL if no params
- * @param param_count Number of parameters (0-8)
+ * @param param_count Number of parameters (0-16)
+ * @param ... Variable parameters (each as U32)
  *
  * This function performs all filtering internally:
  * - Module enable check (via g_ww_log_module_mask)
  * - Level threshold check (via g_ww_log_level_threshold)
  *
- * Only outputs if both checks pass.
+ * Parameters are extracted via va_list inside the function,
+ * eliminating the need to create arrays at each call site.
  */
 void ww_log_encode_output(U16 log_id, U16 line, U8 level,
-                          const U32 *params, U8 param_count);
+                          U8 param_count, ...);
 
-/* ========== Variadic Macro Helpers ========== */
+/* ========== Argument Counting Macro ========== */
 
 /**
- * Count number of variadic arguments (supports 0-8)
+ * Count number of variadic arguments (supports 0-16)
  * Uses ##__VA_ARGS__ GNU extension to handle empty case
  */
 #define _WW_LOG_ARG_COUNT(...) \
-    _WW_LOG_ARG_COUNT_IMPL(0, ##__VA_ARGS__, 8,7,6,5,4,3,2,1,0)
-#define _WW_LOG_ARG_COUNT_IMPL(_0,_1,_2,_3,_4,_5,_6,_7,_8,N,...) N
+    _WW_LOG_ARG_COUNT_IMPL(0, ##__VA_ARGS__, \
+        16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0)
 
-/**
- * Check if variadic arguments exist: returns 0 (empty) or 1 (has args)
- *
- * Expansion examples:
- *   _WW_LOG_HAS_ARGS()      -> 0  (no args)
- *   _WW_LOG_HAS_ARGS(a)     -> 1  (has args)
- *   _WW_LOG_HAS_ARGS(a,b,c) -> 1  (has args)
- */
-#define _WW_LOG_HAS_ARGS(...) \
-    _WW_LOG_HAS_ARGS_IMPL(0, ##__VA_ARGS__, 1,1,1,1,1,1,1,1,0)
-#define _WW_LOG_HAS_ARGS_IMPL(_0,_1,_2,_3,_4,_5,_6,_7,_8,N,...) N
-
-/* ========== Simplified Dispatch (only 2 variants) ========== */
-
-/**
- * Dispatch based on whether args exist (0 or 1)
- * This replaces the previous 9 separate macros with just 2
- */
-#define _WW_LOG_DISPATCH(has_args) _WW_LOG_DISPATCH_IMPL(has_args)
-#define _WW_LOG_DISPATCH_IMPL(has_args) _WW_LOG_CALL_##has_args
-
-/**
- * No parameters: pass NULL directly
- */
-#define _WW_LOG_CALL_0(log_id, line, level, count) \
-    ww_log_encode_output((log_id), (line), (level), (const U32*)0, 0)
-
-/**
- * Has parameters: create array on stack
- */
-#define _WW_LOG_CALL_1(log_id, line, level, count, ...) \
-    do { \
-        U32 _p[] = {__VA_ARGS__}; \
-        ww_log_encode_output((log_id), (line), (level), _p, (count)); \
-    } while(0)
+#define _WW_LOG_ARG_COUNT_IMPL( \
+    _0,_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16,N,...) N
 
 /* ========== Public API Macros ========== */
 
@@ -136,35 +99,30 @@ void ww_log_encode_output(U16 log_id, U16 line, U8 level,
  * IMPORTANT: The 'tag' and 'fmt' parameters are COMPLETELY IGNORED
  * in encode mode - they are NOT compiled into the binary!
  *
- * Usage:
- *   LOG_ERR(tag, "message")              -> outputs encoded log, 0 params
- *   LOG_INF(tag, "val=%d", 123)          -> outputs encoded log, 1 param
- *   LOG_DBG(tag, "x=%d y=%d", 10, 20)    -> outputs encoded log, 2 params
+ * Macro expansion is minimal - just a single function call:
+ *   LOG_INF(tag, "val=%d", 123)
+ *   -> ww_log_encode_output(CURRENT_LOG_ID, __LINE__, 2, 1, 123)
  *
- * Macro expansion is minimal:
- *   - Only creates param array (if needed) and calls function
- *   - All filtering is done inside function
- *   - fmt string is discarded (not in binary)
+ * Usage:
+ *   LOG_ERR(tag, "message")              -> 0 params
+ *   LOG_INF(tag, "val=%d", 123)          -> 1 param
+ *   LOG_DBG(tag, "x=%d y=%d", 10, 20)    -> 2 params
  */
 #define LOG_ERR(tag, fmt, ...) \
-    _WW_LOG_DISPATCH(_WW_LOG_HAS_ARGS(__VA_ARGS__))( \
-        CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_ERR, \
-        _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_ERR, \
+                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 #define LOG_WRN(tag, fmt, ...) \
-    _WW_LOG_DISPATCH(_WW_LOG_HAS_ARGS(__VA_ARGS__))( \
-        CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_WRN, \
-        _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_WRN, \
+                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 #define LOG_INF(tag, fmt, ...) \
-    _WW_LOG_DISPATCH(_WW_LOG_HAS_ARGS(__VA_ARGS__))( \
-        CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_INF, \
-        _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_INF, \
+                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 #define LOG_DBG(tag, fmt, ...) \
-    _WW_LOG_DISPATCH(_WW_LOG_HAS_ARGS(__VA_ARGS__))( \
-        CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_DBG, \
-        _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_DBG, \
+                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 /* ========== RAM Buffer (Optional) ========== */
 
