@@ -82,62 +82,51 @@
 void ww_log_encode_output(U16 log_id, U16 line, U8 level,
                           const U32 *params, U8 param_count);
 
-/* ========== Argument Counting for Variadic Macros ========== */
+/* ========== Variadic Macro Helpers ========== */
 
 /**
- * Count number of variadic arguments (supports 0-10)
- * Note: This counts ALL arguments after fmt
+ * Count number of variadic arguments (supports 0-8)
+ * Uses ##__VA_ARGS__ GNU extension to handle empty case
  */
 #define _WW_LOG_ARG_COUNT(...) \
-    _WW_LOG_ARG_COUNT_IMPL(0, ##__VA_ARGS__, 10,9,8,7,6,5,4,3,2,1,0)
-
-#define _WW_LOG_ARG_COUNT_IMPL(_0,_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,N,...) N
-
-/* ========== Internal Helper Macros ========== */
+    _WW_LOG_ARG_COUNT_IMPL(0, ##__VA_ARGS__, 8,7,6,5,4,3,2,1,0)
+#define _WW_LOG_ARG_COUNT_IMPL(_0,_1,_2,_3,_4,_5,_6,_7,_8,N,...) N
 
 /**
- * Helper to create parameter array
- * For 0 params: pass NULL
- * For 1+ params: create array on stack
+ * Check if variadic arguments exist: returns 0 (empty) or 1 (has args)
+ *
+ * Expansion examples:
+ *   _WW_LOG_HAS_ARGS()      -> 0  (no args)
+ *   _WW_LOG_HAS_ARGS(a)     -> 1  (has args)
+ *   _WW_LOG_HAS_ARGS(a,b,c) -> 1  (has args)
  */
-#define _WW_LOG_ENCODE_CALL_0(log_id, line, level) \
+#define _WW_LOG_HAS_ARGS(...) \
+    _WW_LOG_HAS_ARGS_IMPL(0, ##__VA_ARGS__, 1,1,1,1,1,1,1,1,0)
+#define _WW_LOG_HAS_ARGS_IMPL(_0,_1,_2,_3,_4,_5,_6,_7,_8,N,...) N
+
+/* ========== Simplified Dispatch (only 2 variants) ========== */
+
+/**
+ * Dispatch based on whether args exist (0 or 1)
+ * This replaces the previous 9 separate macros with just 2
+ */
+#define _WW_LOG_DISPATCH(has_args) _WW_LOG_DISPATCH_IMPL(has_args)
+#define _WW_LOG_DISPATCH_IMPL(has_args) _WW_LOG_CALL_##has_args
+
+/**
+ * No parameters: pass NULL directly
+ */
+#define _WW_LOG_CALL_0(log_id, line, level, count) \
     ww_log_encode_output((log_id), (line), (level), (const U32*)0, 0)
 
-#define _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, ...) \
-    do { \
-        U32 _params[] = {__VA_ARGS__}; \
-        ww_log_encode_output((log_id), (line), (level), _params, (count)); \
-    } while(0)
-
 /**
- * Dispatch macro: choose between 0-param and N-param versions
+ * Has parameters: create array on stack
  */
-#define _WW_LOG_ENCODE_DISPATCH(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_SELECT(count)(log_id, line, level, count, ##__VA_ARGS__)
-
-#define _WW_LOG_ENCODE_SELECT(count) _WW_LOG_ENCODE_SELECT_IMPL(count)
-#define _WW_LOG_ENCODE_SELECT_IMPL(count) _WW_LOG_ENCODE_##count
-
-/* Select between 0-param call and N-param call */
-#define _WW_LOG_ENCODE_0(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_0(log_id, line, level)
-
-#define _WW_LOG_ENCODE_1(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
-#define _WW_LOG_ENCODE_2(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
-#define _WW_LOG_ENCODE_3(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
-#define _WW_LOG_ENCODE_4(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
-#define _WW_LOG_ENCODE_5(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
-#define _WW_LOG_ENCODE_6(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
-#define _WW_LOG_ENCODE_7(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
-#define _WW_LOG_ENCODE_8(log_id, line, level, count, ...) \
-    _WW_LOG_ENCODE_CALL_N(log_id, line, level, count, __VA_ARGS__)
+#define _WW_LOG_CALL_1(log_id, line, level, count, ...) \
+    do { \
+        U32 _p[] = {__VA_ARGS__}; \
+        ww_log_encode_output((log_id), (line), (level), _p, (count)); \
+    } while(0)
 
 /* ========== Public API Macros ========== */
 
@@ -158,20 +147,24 @@ void ww_log_encode_output(U16 log_id, U16 line, U8 level,
  *   - fmt string is discarded (not in binary)
  */
 #define LOG_ERR(tag, fmt, ...) \
-    _WW_LOG_ENCODE_DISPATCH(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_ERR, \
-                            _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    _WW_LOG_DISPATCH(_WW_LOG_HAS_ARGS(__VA_ARGS__))( \
+        CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_ERR, \
+        _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 #define LOG_WRN(tag, fmt, ...) \
-    _WW_LOG_ENCODE_DISPATCH(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_WRN, \
-                            _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    _WW_LOG_DISPATCH(_WW_LOG_HAS_ARGS(__VA_ARGS__))( \
+        CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_WRN, \
+        _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 #define LOG_INF(tag, fmt, ...) \
-    _WW_LOG_ENCODE_DISPATCH(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_INF, \
-                            _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    _WW_LOG_DISPATCH(_WW_LOG_HAS_ARGS(__VA_ARGS__))( \
+        CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_INF, \
+        _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 #define LOG_DBG(tag, fmt, ...) \
-    _WW_LOG_ENCODE_DISPATCH(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_DBG, \
-                            _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    _WW_LOG_DISPATCH(_WW_LOG_HAS_ARGS(__VA_ARGS__))( \
+        CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_DBG, \
+        _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
 
 /* ========== RAM Buffer (Optional) ========== */
 
