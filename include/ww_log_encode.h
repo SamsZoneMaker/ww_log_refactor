@@ -27,6 +27,7 @@
 
 #include "file_id.h"
 #include "ww_log_modules.h"
+#include "ww_log_config.h"
 
 /* ========== Module ID Extraction ========== */
 
@@ -108,21 +109,38 @@ void ww_log_encode_output(U16 log_id, U16 line, U8 level,
  *   LOG_INF(tag, "val=%d", 123)          -> 1 param
  *   LOG_DBG(tag, "x=%d y=%d", 10, 20)    -> 2 params
  */
-#define LOG_ERR(tag, fmt, ...) \
-    ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_ERR, \
-                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+/* Static compile-time filtering for encode mode */
+#if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_ERR)
+    #define LOG_ERR(tag, fmt, ...) \
+        ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_ERR, \
+                             _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+#else
+    #define LOG_ERR(tag, fmt, ...) do {} while (0)
+#endif
 
-#define LOG_WRN(tag, fmt, ...) \
-    ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_WRN, \
-                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+#if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_WRN)
+    #define LOG_WRN(tag, fmt, ...) \
+        ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_WRN, \
+                             _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+#else
+    #define LOG_WRN(tag, fmt, ...) do {} while (0)
+#endif
 
-#define LOG_INF(tag, fmt, ...) \
-    ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_INF, \
-                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+#if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_INF)
+    #define LOG_INF(tag, fmt, ...) \
+        ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_INF, \
+                             _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+#else
+    #define LOG_INF(tag, fmt, ...) do {} while (0)
+#endif
 
-#define LOG_DBG(tag, fmt, ...) \
-    ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_DBG, \
-                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+#if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_DBG)
+    #define LOG_DBG(tag, fmt, ...) \
+        ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_DBG, \
+                             _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+#else
+    #define LOG_DBG(tag, fmt, ...) do {} while (0)
+#endif
 
 /* ========== RAM Buffer (Optional) ========== */
 

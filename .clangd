@@ -1,0 +1,35 @@
+# clangd 配置文件，由 clangd_config_generator 生成
+CompileFlags:
+  Add:
+    - -I.
+    - -Iinclude
+    - -Isrc
+    - -Isrc/app
+    - -Isrc/brom
+    - -Isrc/demo
+    - -Isrc/drivers
+    - -Isrc/test
+    - -DWW_LOG_MODE_ENCODE
+    - -D_GNU_SOURCE
+    - -DDEBUG=1
+    - -DWW_LOG_ENCODE_RAM_BUFFER_EN
+    - -DWW_LOG_MODE_STR
+    - -DWW_LOG_MODE_DISABLED
+  Remove:
+    - -W*
+    - -std=*
+    - -O*
+
+Diagnostics:
+  UnusedIncludes: false
+  MissingIncludes: false
+
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  VariableTypes: true
+  DeducedTypes: true
+
+Index:
+  Background: Build
+  StandardLibrary: true

@@ -30,6 +30,30 @@ typedef int32_t  S32;
  *   3: DBG - Debug (detailed execution flow)
  */
 
+/* ========== Static Compile-time Threshold ========== */
+
+/**
+ * Static compile-time log level threshold
+ *
+ * Logs with level higher than this threshold will be compiled out
+ * (expanded to empty) and will NOT appear in the final executable.
+ *
+ * This provides compile-time filtering in addition to runtime filtering.
+ *
+ * Values:
+ *   0: ERR - Only error logs are compiled in
+ *   1: WRN - Error and warning logs are compiled in
+ *   2: INF - Error, warning, and info logs are compiled in
+ *   3: DBG - All logs are compiled in (default)
+ *
+ * Usage:
+ *   Define in Makefile with -DWW_LOG_COMPILE_THRESHOLD=1 to compile out DBG and INF logs
+ *   Or uncomment one of the definitions below
+ */
+#ifndef WW_LOG_COMPILE_THRESHOLD
+#define WW_LOG_COMPILE_THRESHOLD  3  /* Default: compile all logs */
+#endif
+
 /* ========== Module Control ========== */
 
 /**

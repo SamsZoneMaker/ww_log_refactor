@@ -31,6 +31,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include "ww_log_modules.h"
+#include "ww_log_config.h"
 
 /* ========== Internal Helper Macros ========== */
 
@@ -73,7 +74,8 @@ void ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
  * All filtering (module mask, level threshold) is done inside the function
  * to minimize code size at each call site.
  */
-#if (WW_LOG_LEVEL_THRESHOLD >= WW_LOG_LEVEL_ERR)
+/* Static compile-time filtering for string mode */
+#if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_ERR)
     #define LOG_ERR(module_id, fmt, ...) \
         ww_log_str_output((module_id), _WW_LOG_FILENAME(__FILE__), __LINE__, \
                         WW_LOG_LEVEL_ERR, fmt, ##__VA_ARGS__)
@@ -81,28 +83,28 @@ void ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
     #define LOG_ERR(module_id, fmt, ...) do {} while (0)
 #endif
 
-#if (WW_LOG_LEVEL_THRESHOLD >= WW_LOG_LEVEL_WRN)
+#if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_WRN)
     #define LOG_WRN(module_id, fmt, ...) \
         ww_log_str_output((module_id), _WW_LOG_FILENAME(__FILE__), __LINE__, \
                         WW_LOG_LEVEL_WRN, fmt, ##__VA_ARGS__)
 #else
-    #define LOG_ERR(module_id, fmt, ...) do {} while (0)
+    #define LOG_WRN(module_id, fmt, ...) do {} while (0)
 #endif
 
-#if (WW_LOG_LEVEL_THRESHOLD >= WW_LOG_LEVEL_INF)
-    #define LOG_ERR(module_id, fmt, ...) \
+#if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_INF)
+    #define LOG_INF(module_id, fmt, ...) \
         ww_log_str_output((module_id), _WW_LOG_FILENAME(__FILE__), __LINE__, \
                           WW_LOG_LEVEL_INF, fmt, ##__VA_ARGS__)
 #else
-    #define LOG_ERR(module_id, fmt, ...) do {} while (0)
+    #define LOG_INF(module_id, fmt, ...) do {} while (0)
 #endif
 
-#if (WW_LOG_LEVEL_THRESHOLD >= WW_LOG_LEVEL_DBG)
-    #define LOG_ERR(module_id, fmt, ...) \
+#if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_DBG)
+    #define LOG_DBG(module_id, fmt, ...) \
         ww_log_str_output((module_id), _WW_LOG_FILENAME(__FILE__), __LINE__, \
                           WW_LOG_LEVEL_DBG, fmt, ##__VA_ARGS__)
 #else
-    #define LOG_ERR(module_id, fmt, ...) do {} while (0)
+    #define LOG_DBG(module_id, fmt, ...) do {} while (0)
 #endif
 
 /* ========== Convenience Macros (Optional) ========== */
