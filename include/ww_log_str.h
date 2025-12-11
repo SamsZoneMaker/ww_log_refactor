@@ -30,8 +30,8 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include "type.h"
 #include "ww_log_modules.h"
-#include "ww_log_config.h"
 
 /* ========== Internal Helper Macros ========== */
 

@@ -25,9 +25,9 @@
 #ifndef WW_LOG_ENCODE_H
 #define WW_LOG_ENCODE_H
 
-#include "file_id.h"
+#include "type.h"
 #include "ww_log_modules.h"
-#include "ww_log_config.h"
+#include "file_id.h"
 
 /* ========== Module ID Extraction ========== */
 

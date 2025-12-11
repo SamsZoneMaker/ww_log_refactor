@@ -19,7 +19,7 @@
 #ifndef WW_LOG_H
 #define WW_LOG_H
 
-#include "ww_log_config.h"
+#include "type.h"
 
 /**
  * Log level definitions
@@ -30,13 +30,26 @@
 #define WW_LOG_LEVEL_DBG  3  /* Debug: detailed execution flow */
 
 /**
- * Log level threshold is now RUNTIME configurable (not compile-time)
- * Use these APIs to control log level at runtime:
- *   ww_log_set_level_threshold(WW_LOG_LEVEL_WRN);  // Only ERR and WRN
- *   ww_log_set_level_threshold(WW_LOG_LEVEL_DBG);  // All logs (default)
+ * Static compile-time log level threshold
  *
- * See ww_log_modules.h for API declarations.
+ * Logs with level higher than this threshold will be compiled out
+ * (expanded to empty) and will NOT appear in the final executable.
+ *
+ * This provides compile-time filtering in addition to runtime filtering.
+ *
+ * Values:
+ *   0: ERR - Only error logs are compiled in
+ *   1: WRN - Error and warning logs are compiled in
+ *   2: INF - Error, warning, and info logs are compiled in
+ *   3: DBG - All logs are compiled in (default)
+ *
+ * Usage:
+ *   Define in Makefile with -DWW_LOG_COMPILE_THRESHOLD=1 to compile out DBG and INF logs
+ *   Or uncomment one of the definitions below
  */
+#ifndef WW_LOG_COMPILE_THRESHOLD
+#define WW_LOG_COMPILE_THRESHOLD  WW_LOG_LEVEL_DBG  /* Default: compile all logs */
+#endif
 
 /**
  * Mode selection: Choose one of the following

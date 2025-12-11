@@ -9,12 +9,15 @@ CompileFlags:
     - -Isrc/demo
     - -Isrc/drivers
     - -Isrc/test
-    - -DWW_LOG_MODE_ENCODE
-    - -D_GNU_SOURCE
     - -DDEBUG=1
-    - -DWW_LOG_ENCODE_RAM_BUFFER_EN
-    - -DWW_LOG_MODE_STR
+    - -DWW_LOG_MODE_ENCODE
     - -DWW_LOG_MODE_DISABLED
+    - -DWW_LOG_STATIC_MODULE_TEST_EN=0"
+    - -DWW_LOG_ENCODE_RAM_BUFFER_EN
+    - -D_GNU_SOURCE
+    - -DWW_LOG_STATIC_MODULE_DEMO_EN=0"
+    - -DWW_LOG_STATIC_MODULE_DEMO_EN=0
+    - -DWW_LOG_MODE_STR
   Remove:
     - -W*
     - -std=*

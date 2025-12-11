@@ -38,7 +38,7 @@
 #ifndef WW_LOG_MODULES_H
 #define WW_LOG_MODULES_H
 
-#include "ww_log_config.h"
+#include "type.h"
 
 /* ========== Module ID Definitions ========== */
 
