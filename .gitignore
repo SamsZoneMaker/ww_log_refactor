@@ -1,0 +1,33 @@
+# Build artifacts
+build/
+bin/
+*.o
+*.a
+*.so
+*.dylib
+
+# Executables
+log_test
+
+# Test outputs
+encode_output.txt
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+.cache
+compile_commands.json
