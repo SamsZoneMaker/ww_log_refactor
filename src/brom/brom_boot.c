@@ -1,13 +1,8 @@
 /**
  * @file brom_boot.c
- * @brief Boot ROM module
+ * @brief BROM boot sequence
  * @date 2025-11-29
- *
- * Example: File with custom offset for precise differentiation
  */
-
-/* Define file offset BEFORE including module header */
-#define CURRENT_FILE_OFFSET  BROM_FILE_BOOT
 
 #include "brom_in.h"
 
@@ -16,29 +11,25 @@
  */
 void brom_boot_execute(void)
 {
-    /* Encode mode: LOG_ID=161 (160+1) */
-    LOG_INF(CURRENT_LOG_PARAM, "Starting boot sequence...");
+    /* File ID is automatically injected by Makefile via -DCURRENT_FILE_ID=xxx */
+    LOG_INF("Starting boot sequence...");
 
-    int boot_stage = 1;
+    LOG_DBG("Boot stage 1: Hardware initialization");
 
-    LOG_DBG(CURRENT_LOG_PARAM, "Boot stage 1: Hardware initialization");
-
-    boot_stage = 2;
-    LOG_DBG(CURRENT_LOG_PARAM, "Boot stage 2: Memory test");
+    LOG_DBG("Boot stage 2: Memory test");
 
     int memory_ok = 1;
     if (!memory_ok) {
-        LOG_ERR(CURRENT_LOG_PARAM, "Memory test failed!");
+        LOG_ERR("Memory test failed!");
         return;
     }
 
-    boot_stage = 3;
-#ifdef WW_LOG_MODE_ENCODE
-    (void)boot_stage;  /* Suppress unused warning in encode mode */
+#ifdef ENABLE_FLASH_CHECK
+    LOG_DBG("Boot stage 3: Flash verification");
 #endif
-    LOG_INF(CURRENT_LOG_PARAM, "Boot stage 3 completed, stage=%d", boot_stage);
+    LOG_INF("Boot stage 3 completed, stage=%d", 333);
 
-    LOG_INF(CURRENT_LOG_PARAM, "Boot sequence completed successfully");
+    LOG_INF("Boot sequence completed successfully");
 }
 
 /**
@@ -46,18 +37,14 @@ void brom_boot_execute(void)
  */
 void brom_boot_check(void)
 {
-    int boot_count = 5;
+    int boot_count = 42;
     int last_error = 0;
-#ifdef WW_LOG_MODE_ENCODE
-    (void)boot_count;   /* Suppress unused warning in encode mode */
-#endif
 
-    LOG_DBG(CURRENT_LOG_PARAM, "Checking boot status...");
+    LOG_DBG("Checking boot status...");
 
     if (last_error != 0) {
-        LOG_WRN(CURRENT_LOG_PARAM, "Previous boot had errors, count=%d, error=%d",
-                         boot_count, last_error);
+        LOG_WRN("Previous boot had errors, count=%d, error=%d", boot_count, last_error);
     } else {
-        LOG_INF(CURRENT_LOG_PARAM, "Boot status OK, count=%d", boot_count);
+        LOG_INF("Boot status OK, count=%d", boot_count);
     }
 }

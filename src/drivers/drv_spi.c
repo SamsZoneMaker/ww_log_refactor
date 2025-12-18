@@ -1,31 +1,19 @@
 /**
  * @file drv_spi.c
- * @brief SPI driver module
+ * @brief SPI driver - LOG test only
  * @date 2025-11-29
  */
 
-#define CURRENT_FILE_OFFSET  DRV_FILE_SPI
 #include "drv_in.h"
 
 void drv_spi_init(void)
 {
-    LOG_INF(CURRENT_LOG_PARAM, "Initializing SPI driver...");
-
-    U32 clock_speed = 1000000;  /* 1 MHz */
-#ifdef WW_LOG_MODE_ENCODE
-    (void)clock_speed;  /* Suppress unused warning in encode mode */
-#endif
-
-    LOG_DBG(CURRENT_LOG_PARAM, "Setting SPI clock to %u Hz", clock_speed);
-    LOG_INF(CURRENT_LOG_PARAM, "SPI driver initialized");
+    LOG_INF("SPI driver init");
+    LOG_DBG("SPI clock: 1MHz");
 }
 
-void drv_spi_transfer(int tx_len, int rx_len)
+void drv_spi_transfer(void)
 {
-#ifdef WW_LOG_MODE_ENCODE
-    (void)tx_len;   /* Suppress unused warning in encode mode */
-    (void)rx_len;   /* Suppress unused warning in encode mode */
-#endif
-    LOG_DBG(CURRENT_LOG_PARAM, "SPI transfer: tx=%d bytes, rx=%d bytes", tx_len, rx_len);
-    LOG_INF(CURRENT_LOG_PARAM, "SPI transfer complete");
+    LOG_DBG("SPI transfer in progress");
+    LOG_INF("SPI transfer complete");
 }

@@ -1,0 +1,122 @@
+{
+  "modules": {
+    "DEFAULT": {
+      "id": 0,
+      "enable": false,
+      "base_id": 0,
+      "description": "Default/System module"
+    },
+    "DEMO": {
+      "id": 1,
+      "enable": true,
+      "base_id": 64,
+      "description": "Demo module"
+    },
+    "TEST": {
+      "id": 2,
+      "enable": true,
+      "base_id": 128,
+      "description": "Test module"
+    },
+    "APP": {
+      "id": 3,
+      "enable": false,
+      "base_id": 192,
+      "description": "Application module"
+    },
+    "DRIVERS": {
+      "id": 4,
+      "enable": true,
+      "base_id": 256,
+      "description": "Drivers module"
+    },
+    "BROM": {
+      "id": 5,
+      "enable": false,
+      "base_id": 320,
+      "description": "BROM module"
+    }
+  },
+  "files": {
+    "examples/main.c": {
+      "module": "DEFAULT",
+      "offset": 0,
+      "description": "Main test program"
+    },
+    "src/demo/demo_init.c": {
+      "module": "DEMO",
+      "offset": 0,
+      "description": "Demo initialization"
+    },
+    "src/demo/demo_process.c": {
+      "module": "DEMO",
+      "offset": 1,
+      "description": "Demo process"
+    },
+    "src/brom/brom_boot.c": {
+      "module": "BROM",
+      "offset": 1,
+      "description": "BROM boot"
+    },
+    "src/brom/brom_loader.c": {
+      "module": "BROM",
+      "offset": 2,
+      "description": "BROM loader"
+    },
+    "src/test/test_unit.c": {
+      "module": "TEST",
+      "offset": 1,
+      "description": "Unit tests"
+    },
+    "src/test/test_integration.c": {
+      "module": "TEST",
+      "offset": 2,
+      "description": "Integration tests"
+    },
+    "src/test/test_stress.c": {
+      "module": "TEST",
+      "offset": 3,
+      "description": "Stress tests"
+    },
+    "src/test/test_file_id_scenarios.c": {
+      "module": "TEST",
+      "offset": 4,
+      "description": "File ID scenarios"
+    },
+    "src/test/test_no_file_id.c": {
+      "module": "TEST",
+      "offset": 5,
+      "description": "No file ID test"
+    },
+    "src/test/test_default_value.c": {
+      "module": "TEST",
+      "offset": 6,
+      "description": "Default value test"
+    },
+    "src/app/app_main.c": {
+      "module": "APP",
+      "offset": 1,
+      "description": "Application main"
+    },
+    "src/app/app_config.c": {
+      "module": "APP",
+      "offset": 2,
+      "description": "Application config"
+    },
+    "src/drivers/drv_uart.c": {
+      "module": "DRIVERS",
+      "offset": 1,
+      "description": "UART driver"
+    },
+    "src/drivers/drv_spi.c": {
+      "module": "DRIVERS",
+      "offset": 2,
+      "description": "SPI driver"
+    },
+    "src/drivers/drv_i2c.c": {
+      "module": "DRIVERS",
+      "offset": 3,
+      "description": "I2C driver"
+    }
+  }
+}

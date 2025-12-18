@@ -1,16 +1,16 @@
 /**
  * @file ww_log_encode.h
- * @brief Encode mode logging implementation (variadic function version)
- * @date 2025-12-04
- *
+ * @brief Encode mode logging implementation (variadic function version with auto module ID)
+ * @date 2025-12-17
  * Encode mode features:
  * - Binary encoding for minimal code size
  * - No format strings stored in ROM (fmt parameter is discarded)
  * - Variadic function for minimal macro expansion
  * - All filtering done in function
+ * - Module ID automatically determined from CURRENT_MODULE_ID
  *
  * Encoding Layout (32 bits):
- * ┌─────────────┬─────────────┬──────────────┬────────┐
+ * ┌─────────────┬─────────────┬──────────────┬────┐
  * │ LOG_ID      │ LINE        │ DATA_LEN     │ LEVEL  │
  * │ (12 bits)   │ (12 bits)   │ (6 bits)     │(2 bits)│
  * │ 31       20 │ 19        8 │ 7          2 │ 1    0 │
@@ -27,16 +27,15 @@
 
 #include "type.h"
 #include "ww_log_modules.h"
-#include "file_id.h"
 
 /* ========== Module ID Extraction ========== */
 
 /**
  * Extract module ID from LOG_ID
- * Since each module reserves 32 slots (DIR_BASE = module_id << 5),
- * we can extract module_id by shifting right by 5 bits
+ * Since each module reserves 64 slots (DIR_BASE = module_id << 6),
+ * we can extract module_id by shifting right by 6 bits
  */
-#define WW_LOG_GET_MODULE_ID(log_id)  ((log_id) >> 5)
+#define WW_LOG_GET_MODULE_ID(log_id)  ((log_id) >> 6)
 
 /* ========== Encoding Macros ========== */
 
@@ -63,7 +62,8 @@
 
 /**
  * @brief Core encode mode output function (variadic version)
- * @param log_id Module/file identifier (12 bits, 0-4095)
+ * @param module_id Module ID (0-31) for filtering
+ * @param log_id File identifier (12 bits, 0-4095)
  * @param line Source line number
  * @param level Log level (0-3)
  * @param param_count Number of parameters (0-16)
@@ -76,8 +76,8 @@
  * Parameters are extracted via va_list inside the function,
  * eliminating the need to create arrays at each call site.
  */
-void ww_log_encode_output(U16 log_id, U16 line, U8 level,
-                          U8 param_count, ...);
+void ww_log_encode_output(U8 module_id, U16 log_id, U16 line, U8 level,
+                U8 param_count, ...);
 
 /* ========== Argument Counting Macro ========== */
 
@@ -95,51 +95,106 @@ void ww_log_encode_output(U16 log_id, U16 line, U8 level,
 /* ========== Public API Macros ========== */
 
 /**
- * Public logging macros for encode mode
+ * Public logging macros for encode mode with automatic module ID
  *
- * IMPORTANT: The 'tag' and 'fmt' parameters are COMPLETELY IGNORED
- * in encode mode - they are NOT compiled into the binary!
- *
+ * IMPORTANT: The 'fmt' parameter is COMPLETELY IGNORED in encode mode
+ * - it is NOT compiled into the binary!
  * Macro expansion is minimal - just a single function call:
- *   LOG_INF(tag, "val=%d", 123)
- *   -> ww_log_encode_output(CURRENT_LOG_ID, __LINE__, 2, 1, 123)
+ *   LOG_INF("val=%d", 123)
+ *   -> ww_log_encode_output(CURRENT_MODULE_ID, CURRENT_FILE_ID, __LINE__, 2, 1, 123)
  *
  * Usage:
- *   LOG_ERR(tag, "message")              -> 0 params
- *   LOG_INF(tag, "val=%d", 123)          -> 1 param
- *   LOG_DBG(tag, "x=%d y=%d", 10, 20)    -> 2 params
+ *   LOG_ERR("message")              -> 0 params
+ *   LOG_INF("val=%d", 123)          -> 1 param
+ *   LOG_DBG("x=%d y=%d", 10, 20)    -> 2 params
+ *
+ * Static Module Switch:
+ *   - Each module can be disabled at compile time via WW_LOG_STATIC_MODULE_XXX_EN=0
+ *   - When disabled, all LOG calls for that module are compiled out (zero code size)
+ *   - Example: -DWW_LOG_STATIC_MODULE_DEMO_EN=0 disables DEMO module logs
+ *
+ * Note: If CURRENT_FILE_ID is not defined (file not in log_config.json
+ *       or module disabled), all log macros become no-ops.
  */
-/* Static compile-time filtering for encode mode */
+
+/* Default to module 0 if CURRENT_MODULE_ID not defined */
+// #ifndef CURRENT_MODULE_ID
+// #define CURRENT_MODULE_ID  WW_LOG_MODULE_DEFAULT
+// #endif
+
+/* Default to file ID 0 if CURRENT_FILE_ID not defined */
+// #ifndef CURRENT_FILE_ID
+// #define CURRENT_FILE_ID  0
+// #endif
+
+/**
+ * Internal macro to call log output function
+ * This is the actual implementation that calls ww_log_encode_output
+ */
+#define _WW_LOG_ENCODE_CALL(level, fmt, ...) \
+    ww_log_encode_output(CURRENT_MODULE_ID, CURRENT_FILE_ID, __LINE__, level, \
+                         _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+
+/**
+ * Static module switch check with compile-time level filtering
+ *
+ * Strategy for zero-code-size static disable:
+ * 1. Each module has WW_LOG_STATIC_MODULE_XXX_EN defined as 0 or 1
+ * 2. Makefile can override via -DWW_LOG_STATIC_MODULE_XXX_EN=0
+ * 3. We use CURRENT_MODULE_STATIC_EN (injected by Makefile per file)
+ * 4. Helper macros _WW_LOG_IF_0/_WW_LOG_IF_1 conditionally expand to code or nothing
+ * 5. When CURRENT_MODULE_STATIC_EN=0, log calls expand to nothing (zero code size)
+ *
+ * This achieves true zero code size for disabled modules!
+ */
+
+/* Default: assume module is DISABLED if CURRENT_MODULE_STATIC_EN not defined */
+/* This ensures that files not in log_config.json will not output logs */
+// #ifndef CURRENT_MODULE_STATIC_EN
+// #define CURRENT_MODULE_STATIC_EN  0
+// #endif
+
+/* Helper macros for conditional expansion based on static switch */
+#define _WW_LOG_IF_0(...)  /* Expands to nothing when disabled */
+#define _WW_LOG_IF_1(...)  __VA_ARGS__  /* Expands to code when enabled */
+
+/* Token concatenation helpers for proper macro expansion */
+#define _WW_LOG_CAT(a, b)  _WW_LOG_CAT_IMPL(a, b)
+#define _WW_LOG_CAT_IMPL(a, b)  a##b
+
+/* Conditional expansion - expands to _WW_LOG_IF_0 or _WW_LOG_IF_1 */
+#define _WW_LOG_IF(cond)  _WW_LOG_CAT(_WW_LOG_IF_, cond)
+
+/* Main expansion macro that checks static switch and conditionally expands */
+#define _WW_LOG_STATIC_EXPAND(level, fmt, ...) \
+    _WW_LOG_IF(CURRENT_MODULE_STATIC_EN)(_WW_LOG_ENCODE_CALL(level, fmt, ##__VA_ARGS__))
+
 #if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_ERR)
-    #define LOG_ERR(tag, fmt, ...) \
-        ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_ERR, \
-                             _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    #define LOG_ERR(fmt, ...) \
+        _WW_LOG_STATIC_EXPAND(WW_LOG_LEVEL_ERR, fmt, ##__VA_ARGS__)
 #else
-    #define LOG_ERR(tag, fmt, ...) do {} while (0)
+    #define LOG_ERR(fmt, ...)  /* Compiled out by level threshold */
 #endif
 
 #if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_WRN)
-    #define LOG_WRN(tag, fmt, ...) \
-        ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_WRN, \
-                             _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    #define LOG_WRN(fmt, ...) \
+        _WW_LOG_STATIC_EXPAND(WW_LOG_LEVEL_WRN, fmt, ##__VA_ARGS__)
 #else
-    #define LOG_WRN(tag, fmt, ...) do {} while (0)
+    #define LOG_WRN(fmt, ...)  /* Compiled out by level threshold */
 #endif
 
 #if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_INF)
-    #define LOG_INF(tag, fmt, ...) \
-        ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_INF, \
-                             _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    #define LOG_INF(fmt, ...) \
+        _WW_LOG_STATIC_EXPAND(WW_LOG_LEVEL_INF, fmt, ##__VA_ARGS__)
 #else
-    #define LOG_INF(tag, fmt, ...) do {} while (0)
+    #define LOG_INF(fmt, ...)  /* Compiled out by level threshold */
 #endif
 
 #if (WW_LOG_COMPILE_THRESHOLD >= WW_LOG_LEVEL_DBG)
-    #define LOG_DBG(tag, fmt, ...) \
-        ww_log_encode_output(CURRENT_LOG_ID, __LINE__, WW_LOG_LEVEL_DBG, \
-                             _WW_LOG_ARG_COUNT(__VA_ARGS__), ##__VA_ARGS__)
+    #define LOG_DBG(fmt, ...) \
+        _WW_LOG_STATIC_EXPAND(WW_LOG_LEVEL_DBG, fmt, ##__VA_ARGS__)
 #else
-    #define LOG_DBG(tag, fmt, ...) do {} while (0)
+    #define LOG_DBG(fmt, ...)  /* Compiled out by level threshold */
 #endif
 
 /* ========== RAM Buffer (Optional) ========== */

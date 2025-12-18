@@ -3,26 +3,30 @@
  * @brief Module definitions and dynamic switch for logging system
  * @date 2025-12-01
  *
- * This file defines:
- * - Module IDs (0-31) used by both string and encode modes
+ * This file provides:
  * - Dynamic module mask for runtime filtering (32-bit, one bit per module)
- * - APIs to control which modules are enabled
+ * - APIs to control which modules are enabled at runtime
+ * - Level threshold control for runtime log filtering
  *
- * Module Assignment:
- *   0      = DEFAULT/SYS (default module for logs without specific module)
- *   1      = DEMO
- *   2      = TEST
- *   3      = APP
- *   4      = DRIVERS
- *   5      = BROM
- *   6-31   = Reserved for future use
+ * Module configuration is centralized in log_config.json:
+ * - Module IDs and names are auto-generated in auto_file_ids.h
+ * - Static compile-time switches are auto-generated in auto_file_ids.h
+ * - File IDs are auto-generated in auto_file_ids.h
+ *
+ * File ID Assignment (64 files per module):
+ *   - File ID = base_id + offset, where base_id = module_id * 64
+ *   - Module 0 (DEFAULT): File IDs 0-63
+ *   - Module 1 (DEMO):    File IDs 64-127
+ *   - Module 2 (TEST):    File IDs 128-191
+ *   - Module 3 (APP):     File IDs 192-255
+ *   - Module 4 (DRIVERS): File IDs 256-319
+ *   - Module 5 (BROM):    File IDs 320-383
  *
  * Dynamic Switch Usage:
  *   - Each bit in g_ww_log_module_mask controls one module
  *   - Bit 0 = Module 0, Bit 1 = Module 1, etc.
  *   - 0xFFFFFFFF = All modules enabled
  *   - 0x00000000 = All modules disabled
- *   - 0x0000001F = Modules 0-4 enabled (DEMO, TEST, APP, DRIVERS, BROM)
  *
  * Examples:
  *   // Enable all modules
@@ -32,119 +36,26 @@
  *   ww_log_set_module_mask(0xFFFFFFDF);
  *
  *   // Only enable DEFAULT and DRIVERS
- *   ww_log_set_module_mask((1 << 0) | (1 << 4));
+ *   ww_log_set_module_mask((1 << WW_LOG_MODULE_DEFAULT) | (1 << WW_LOG_MODULE_DRIVERS));
  */
 
 #ifndef WW_LOG_MODULES_H
 #define WW_LOG_MODULES_H
 
 #include "type.h"
-
-/* ========== Module ID Definitions ========== */
-
-/**
- * Module IDs (0-31)
- * These IDs are used in both string and encode modes
- */
-#define WW_LOG_MODULE_DEFAULT   0   /**< Default/System module */
-#define WW_LOG_MODULE_DEMO      1   /**< DEMO module */
-#define WW_LOG_MODULE_TEST      2   /**< TEST module */
-#define WW_LOG_MODULE_APP       3   /**< APP module */
-#define WW_LOG_MODULE_DRIVERS   4   /**< DRIVERS module */
-#define WW_LOG_MODULE_BROM      5   /**< BROM module */
-
-/* Reserved: 6-31 for future modules */
-
-/**
- * Maximum number of modules (32)
- */
-#define WW_LOG_MODULE_MAX       32
-
-/* ========== Static Module Switches (Compile-time) ========== */
-
-/**
- * Static module switches - compile-time enable/disable
- *
- * These switches determine whether a module's LOG code is compiled into the binary.
- * - If set to 0: All LOG calls for this module are compiled out (zero code size)
- * - If set to 1: LOG code is compiled in and can be controlled by dynamic switch
- *
- * Use cases:
- * - Set to 0 to permanently exclude debug modules from production builds
- * - Set to 0 for unused modules to reduce binary size
- * - Keep at 1 for modules that need runtime control
- *
- * Configuration priority:
- *   1. Command line: -DWW_LOG_STATIC_MODULE_DEMO_EN=0
- *   2. ww_log_config.h or build system
- *   3. Default: 1 (enabled) if not defined
- *
- * Example:
- *   // In Makefile or build config
- *   CFLAGS += -DWW_LOG_STATIC_MODULE_TEST_EN=0    # Exclude TEST module
- *   CFLAGS += -DWW_LOG_STATIC_MODULE_DRIVERS_EN=0 # Exclude DRIVERS module
- */
-
-#ifndef WW_LOG_STATIC_MODULE_DEFAULT_EN
-#define WW_LOG_STATIC_MODULE_DEFAULT_EN   1  /**< DEFAULT module static switch */
-#endif
-
-#ifndef WW_LOG_STATIC_MODULE_DEMO_EN
-#define WW_LOG_STATIC_MODULE_DEMO_EN      1  /**< DEMO module static switch */
-#endif
-
-#ifndef WW_LOG_STATIC_MODULE_TEST_EN
-#define WW_LOG_STATIC_MODULE_TEST_EN      1  /**< TEST module static switch */
-#endif
-
-#ifndef WW_LOG_STATIC_MODULE_APP_EN
-#define WW_LOG_STATIC_MODULE_APP_EN       1  /**< APP module static switch */
-#endif
-
-#ifndef WW_LOG_STATIC_MODULE_DRIVERS_EN
-#define WW_LOG_STATIC_MODULE_DRIVERS_EN   1  /**< DRIVERS module static switch */
-#endif
-
-#ifndef WW_LOG_STATIC_MODULE_BROM_EN
-#define WW_LOG_STATIC_MODULE_BROM_EN      1  /**< BROM module static switch */
-#endif
-
-/**
- * Module ID to static switch mapping
- * Used by LOG macros to check compile-time enable status
- */
-#define WW_LOG_STATIC_ENABLED_0  WW_LOG_STATIC_MODULE_DEFAULT_EN
-#define WW_LOG_STATIC_ENABLED_1  WW_LOG_STATIC_MODULE_DEMO_EN
-#define WW_LOG_STATIC_ENABLED_2  WW_LOG_STATIC_MODULE_TEST_EN
-#define WW_LOG_STATIC_ENABLED_3  WW_LOG_STATIC_MODULE_APP_EN
-#define WW_LOG_STATIC_ENABLED_4  WW_LOG_STATIC_MODULE_DRIVERS_EN
-#define WW_LOG_STATIC_ENABLED_5  WW_LOG_STATIC_MODULE_BROM_EN
-
-/**
- * Static switch check macro with two-level expansion
- * This allows module_id to be a macro that expands to a number
- *
- * Example expansion:
- *   WW_LOG_STATIC_CHECK(WW_LOG_MODULE_DEMO)
- *   → WW_LOG_STATIC_CHECK(1)
- *   → WW_LOG_STATIC_ENABLED_1
- *   → WW_LOG_STATIC_MODULE_DEMO_EN
- *   → 1 (or 0 if disabled)
- */
-#define WW_LOG_STATIC_CHECK(module_id)  _WW_LOG_STATIC_CHECK_IMPL(module_id)
-#define _WW_LOG_STATIC_CHECK_IMPL(id)   WW_LOG_STATIC_ENABLED_##id
+#include "auto_file_ids.h"  /* Auto-generated module IDs and static switches */
 
 /* ========== Dynamic Module Mask ========== */
 
 /**
  * Global module mask variable
- * Each bit controls whether a module is enabled
+ * Each bit controls whether a module is enabled at runtime
  * Default: 0xFFFFFFFF (all modules enabled)
  */
 extern U32 g_ww_log_module_mask;
 
 /**
- * @brief Check if a module is enabled
+ * @brief Check if a module is enabled (runtime check)
  * @param module_id Module ID (0-31)
  * @return Non-zero if enabled, 0 if disabled
  */

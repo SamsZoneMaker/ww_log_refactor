@@ -4,15 +4,35 @@
 
 ## 快速开始
 
+### 1. 配置日志模式
+
+编辑 [`include/ww_log.h`](include/ww_log.h)，取消注释所需的模式：
+
+```c
+// 选择一种模式（只能启用一个）：
+// #define WW_LOG_MODE_STR       // String 模式（人类可读）
+#define WW_LOG_MODE_ENCODE      // Encode 模式（二进制编码）
+// #define WW_LOG_MODE_DISABLED  // 禁用所有日志
+```
+
+### 2. 编译和运行
+
 ```bash
-# String 模式（人类可读）
-make test-str
+# 编译项目
+make
 
-# Encode 模式（二进制编码，最小资源占用）
-make test-encode
+# 运行测试
+make run
 
-# 解码二进制日志
-./bin/log_test_encode | grep "^0x" | python3 tools/log_decoder.py -
+# 解码二进制日志（仅encode模式）
+./bin/log_test | grep "^0x" | python3 tools/log_decoder.py -
+```
+
+### 3. 切换模式
+
+要切换日志模式：
+1. 编辑 [`include/ww_log.h`](include/ww_log.h) 更改模式定义
+2. 重新编译：`make clean && make`
 ```
 
 ## 核心特性

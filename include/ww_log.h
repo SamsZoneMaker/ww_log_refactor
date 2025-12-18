@@ -52,11 +52,20 @@
 #endif
 
 /**
- * Mode selection: Choose one of the following
- * - WW_LOG_MODE_STR: String mode (default)
- * - WW_LOG_MODE_ENCODE: Encode mode
+ * Mode selection: Choose one of the following by uncommenting
+ * - WW_LOG_MODE_STR: String mode (printf-style, human-readable)
+ * - WW_LOG_MODE_ENCODE: Encode mode (binary encoding, minimal code size)
  * - WW_LOG_MODE_DISABLED: All logging disabled
+ *
+ * NOTE: Only ONE mode should be uncommented at a time!
  */
+
+/* Uncomment ONE of the following modes: */
+#define WW_LOG_MODE_STR
+// #define WW_LOG_MODE_ENCODE
+// #define WW_LOG_MODE_DISABLED
+
+/* Include corresponding implementation */
 #if defined(WW_LOG_MODE_ENCODE)
     #include "ww_log_encode.h"
 #elif defined(WW_LOG_MODE_STR)
@@ -68,9 +77,7 @@
     #define LOG_INF(...)  do { } while(0)
     #define LOG_DBG(...)  do { } while(0)
 #else
-    /* Default to string mode if not specified */
-    #define WW_LOG_MODE_STR
-    #include "ww_log_str.h"
+    #error "No log mode defined! Please uncomment one mode in ww_log.h"
 #endif
 
 /**

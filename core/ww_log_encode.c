@@ -1,7 +1,7 @@
 /**
  * @file ww_log_encode.c
  * @brief Encode mode logging implementation (variadic function version)
- * @date 2025-12-04
+ * @date 2025-12-17
  */
 
 #include "ww_log.h"
@@ -134,7 +134,8 @@ void ww_log_ram_clear(void)
 
 /**
  * @brief Core encode mode output function (variadic version)
- * @param log_id Module/file identifier (12 bits, 0-4095)
+ * @param module_id Module ID (0-31) for filtering
+ * @param log_id File identifier (12 bits, 0-4095)
  * @param line Source line number
  * @param level Log level (0-3)
  * @param param_count Number of parameters (0-16)
@@ -148,17 +149,13 @@ void ww_log_ram_clear(void)
  * Parameters are extracted via va_list and stored in a local array,
  * then used for both RAM buffer and UART output.
  */
-void ww_log_encode_output(U16 log_id, U16 line, U8 level,
-                          U8 param_count, ...)
+void ww_log_encode_output(U8 module_id, U16 log_id, U16 line, U8 level,
+                U8 param_count, ...)
 {
     U32 encoded_log;
-    U8 module_id;
     va_list args;
     U32 params[16];  /* Support up to 16 parameters */
     U8 i;
-
-    /* Extract module ID from log_id (log_id >> 5) */
-    module_id = (U8)(log_id >> 5);
 
     /* Check module enable (dynamic switch) */
     if ((g_ww_log_module_mask & (1U << module_id)) == 0) {

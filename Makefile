@@ -1,12 +1,14 @@
-# Makefile for Log System Test (New Design)
-# Date: 2025-11-29
+# Makefile for Log System Test (New Design with Auto File ID)
+# Date: 2025-12-17
 
 # Compiler and flags
 CC = gcc
-CFLAGS = -Wall -Wextra -Iinclude -I src/demo -I src/brom -I src/test -I src/app -I src/drivers -g -O2
+BASE_CFLAGS = -Wall -Wextra -Iinclude -I src/demo -I src/brom -I src/test -I src/app -I src/drivers -g -O2 -Wno-unused-variable -Wno-unused-function
 LDFLAGS =
 
 # Color output
+PREFIX_C = \033[0;33m
+RESET_C = \033[0m
 GREEN = \033[0;32m
 YELLOW = \033[0;33m
 BLUE = \033[0;34m
@@ -16,9 +18,14 @@ NC = \033[0m
 # Directories
 BUILD_DIR = build
 BIN_DIR = bin
+OBJ_DIR = $(BUILD_DIR)
+
+# Log configuration
+LOG_CONFIG = log_config.json
+FILE_IDS_MK = $(BUILD_DIR)/file_ids.mk
 
 # Source files - include all modules
-ALL_SRCS = $(wildcard src/core/*.c) \
+ALL_SRCS = $(wildcard core/*.c) \
            $(wildcard src/demo/*.c) \
            $(wildcard src/brom/*.c) \
            $(wildcard src/test/*.c) \
@@ -29,47 +36,48 @@ ALL_SRCS = $(wildcard src/core/*.c) \
 # Object files
 OBJS = $(ALL_SRCS:%.c=$(BUILD_DIR)/%.o)
 
-# Mode selection (str, encode, or disabled)
-# Usage: make MODE=encode
-MODE ?= str
+# Mode is now defined in ww_log.h, not via Makefile
+# Makefile only handles compilation flags
+
+# Enable RAM buffer for encode mode (optional)
+# CFLAGS += -DWW_LOG_ENCODE_RAM_BUFFER_EN
 
 # Static module switches (compile-time enable/disable)
-# Usage: make MODE=str STATIC_OPTS="-DWW_LOG_STATIC_MODULE_DEMO_EN=0"
+# Usage: make STATIC_OPTS="-DWW_LOG_STATIC_MODULE_DEMO_EN=0"
 # Multiple modules: STATIC_OPTS="-DWW_LOG_STATIC_MODULE_DEMO_EN=0 -DWW_LOG_STATIC_MODULE_TEST_EN=0"
 STATIC_OPTS ?=
 
-# Set mode-specific flags
-ifeq ($(MODE),str)
-    CFLAGS += -DWW_LOG_MODE_STR
-    MODE_STR = "STRING MODE"
-else ifeq ($(MODE),encode)
-    CFLAGS += -DWW_LOG_MODE_ENCODE
-    CFLAGS += -DWW_LOG_ENCODE_RAM_BUFFER_EN
-    MODE_STR = "ENCODE MODE"
-else ifeq ($(MODE),disabled)
-    CFLAGS += -DWW_LOG_MODE_DISABLED
-    MODE_STR = "DISABLED MODE"
-else
-    $(error Invalid MODE=$(MODE). Use: MODE=str, MODE=encode, or MODE=disabled)
-endif
-
-# Add static switches to CFLAGS
-ifneq ($(STATIC_OPTS),)
-    CFLAGS += $(STATIC_OPTS)
-endif
+# Combine base flags with static options
+CFLAGS = $(BASE_CFLAGS) $(STATIC_OPTS)
 
 # Output executable
-TARGET = $(BIN_DIR)/log_test_$(MODE)
+TARGET = $(BIN_DIR)/log_test
+
+# Generate file ID mappings
+# This target creates the file_ids.mk file which defines FILE_ID_xxx and MODULE_ID_xxx variables
+$(FILE_IDS_MK): $(LOG_CONFIG) tools/gen_file_ids.py
+	@echo -e "$(BLUE)Generating file ID mappings...$(NC)"
+	@mkdir -p $(BUILD_DIR)
+	@python3 tools/gen_file_ids.py $(LOG_CONFIG) --makefile > $(FILE_IDS_MK)
+	@python3 tools/gen_file_ids.py $(LOG_CONFIG) --header > include/auto_file_ids.h
+	@echo -e "$(GREEN)File ID mappings generated.$(NC)"
+
+# Phony target for manual regeneration
+.PHONY: gen-log-ids
+gen-log-ids: $(FILE_IDS_MK)
+
+# Include generated file ID mappings (will trigger generation if missing)
+-include $(FILE_IDS_MK)
 
 # Default target
 .PHONY: all
-all: $(TARGET)
+all: gen-log-ids $(TARGET)
 	@echo -e "$(GREEN)Build complete: $(TARGET)$(NC)"
-	@echo -e "$(BLUE)Mode: $(MODE_STR)$(NC)"
+	@echo -e "$(BLUE)Mode is configured in include/ww_log.h$(NC)"
 
 # Create directories
 $(BUILD_DIR) $(BIN_DIR):
-	@mkdir -p $(BUILD_DIR)/src/core
+	@mkdir -p $(BUILD_DIR)/core
 	@mkdir -p $(BUILD_DIR)/src/demo
 	@mkdir -p $(BUILD_DIR)/src/brom
 	@mkdir -p $(BUILD_DIR)/src/test
@@ -83,11 +91,29 @@ $(TARGET): $(BUILD_DIR) $(BIN_DIR) $(OBJS)
 	@echo -e "$(BLUE)Linking $@...$(NC)"
 	@$(CC) $(OBJS) -o $@ $(LDFLAGS)
 
-# Compile source files
-$(BUILD_DIR)/%.o: %.c
+# Compile source files with automatic file ID and module ID injection
+$(BUILD_DIR)/%.o: %.c $(FILE_IDS_MK)
+	@echo -e "${PREFIX_C}[CC   ] $<${RESET_C}"
 	@mkdir -p $(dir $@)
-	@echo -e "$(YELLOW)Compiling $<...$(NC)"
-	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+	$(eval FILE_VAR := $(subst /,_,$(subst .,_,FILE_ID_$<)))
+	$(eval MODULE_VAR := $(subst /,_,$(subst .,_,MODULE_ID_$<)))
+	$(eval STATIC_VAR := $(subst /,_,$(subst .,_,MODULE_STATIC_EN_$<)))
+	$(eval FILE_ID_VAL := $($(FILE_VAR)))
+	$(eval MODULE_ID_VAL := $($(MODULE_VAR)))
+	$(eval STATIC_EN_VAL := $($(STATIC_VAR)))
+	@if [ -n "$(FILE_ID_VAL)" ]; then \
+		$(CC) $(BASE_CFLAGS) $(STATIC_OPTS) \
+			-DCURRENT_FILE_ID=$(FILE_ID_VAL) \
+			-DCURRENT_MODULE_ID=$(MODULE_ID_VAL) \
+			-DCURRENT_MODULE_STATIC_EN=$(STATIC_EN_VAL) \
+			-D__NOTDIR_FILE__=\"$(notdir $<)\" \
+			-MMD -MP -c $< -o $@; \
+	else \
+		$(CC) $(BASE_CFLAGS) $(STATIC_OPTS) \
+			-DCURRENT_MODULE_STATIC_EN=0 \
+			-D__NOTDIR_FILE__=\"$(notdir $<)\" \
+			-MMD -MP -c $< -o $@; \
+	fi
 
 # Include dependency files
 -include $(OBJS:.o=.d)
@@ -97,6 +123,7 @@ $(BUILD_DIR)/%.o: %.c
 clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf $(BUILD_DIR)
+	@rm -f include/auto_file_ids.h
 	@echo "Clean complete."
 
 # Deep clean
@@ -104,6 +131,7 @@ clean:
 distclean:
 	@echo "Deep cleaning..."
 	@rm -rf $(BUILD_DIR) $(BIN_DIR)
+	@rm -f include/auto_file_ids.h
 	@echo "Deep clean complete."
 
 # Run test program
@@ -111,93 +139,41 @@ distclean:
 run: all
 	@echo ""
 	@echo -e "$(GREEN)=========================================$(NC)"
-	@echo -e "$(GREEN)  Running Test ($(MODE_STR))$(NC)"
+	@echo -e "$(GREEN)  Running Test$(NC)"
 	@echo -e "$(GREEN)=========================================$(NC)"
 	@echo ""
 	@./$(TARGET)
 
-# Build and run string mode (clean build)
-.PHONY: test-str
-test-str: clean
-	@$(MAKE) MODE=str run
-
-# Build and run encode mode (clean build)
-.PHONY: test-encode
-test-encode: clean
-	@$(MAKE) MODE=encode run
-
-# Build and run disabled mode (clean build)
-.PHONY: test-disabled
-test-disabled: clean
-	@$(MAKE) MODE=disabled run
-
-# Test all modes
-.PHONY: test-all
-test-all:
-	@echo -e "$(GREEN)=========================================$(NC)"
-	@echo -e "$(GREEN)  Testing All Modes$(NC)"
-	@echo -e "$(GREEN)=========================================$(NC)"
-	@echo ""
-	@$(MAKE) test-str
-	@echo ""
-	@$(MAKE) test-encode
-	@echo ""
-	@$(MAKE) test-disabled
-	@echo ""
-	@echo -e "$(GREEN)=========================================$(NC)"
-	@echo -e "$(GREEN)  All Mode Tests Complete$(NC)"
-	@echo -e "$(GREEN)=========================================$(NC)"
-
-# Size comparison
-.PHONY: size-compare
-size-compare:
-	@echo -e "$(GREEN)=========================================$(NC)"
-	@echo -e "$(GREEN)  Binary Size Comparison$(NC)"
-	@echo -e "$(GREEN)=========================================$(NC)"
-	@echo ""
-	@echo -e "$(YELLOW)Building all three modes...$(NC)"
-	@$(MAKE) clean MODE=str > /dev/null 2>&1
-	@$(MAKE) all MODE=str > /dev/null 2>&1
-	@$(MAKE) clean MODE=encode > /dev/null 2>&1
-	@$(MAKE) all MODE=encode > /dev/null 2>&1
-	@$(MAKE) clean MODE=disabled > /dev/null 2>&1
-	@$(MAKE) all MODE=disabled > /dev/null 2>&1
-	@echo ""
-	@echo -e "$(BLUE)Size comparison:$(NC)"
-	@size $(BIN_DIR)/log_test_str $(BIN_DIR)/log_test_encode $(BIN_DIR)/log_test_disabled
-	@echo ""
-	@ls -lh $(BIN_DIR)/log_test_* | awk '{print "  " $$9 " - " $$5}'
-	@echo ""
-	@echo -e "$(GREEN)Done!$(NC)"
-
 # Help
 .PHONY: help
 help:
-	@echo -e "$(GREEN)Log System Makefile (New Design)$(NC)"
+	@echo -e "$(GREEN)Log System Makefile (Auto File ID)$(NC)"
 	@echo ""
 	@echo -e "$(BLUE)Usage:$(NC)"
-	@echo "  make [MODE=str|encode|disabled] [target]"
+	@echo "  make [STATIC_OPTS=\"...\"] [target]"
 	@echo ""
-	@echo -e "$(BLUE)Modes:$(NC)"
-	@echo "  MODE=str       - String mode (printf-style, human-readable)"
-	@echo "  MODE=encode    - Encode mode (binary encoding, minimal code size)"
-	@echo "  MODE=disabled  - All logging disabled"
+	@echo -e "$(BLUE)Mode Configuration:$(NC)"
+	@echo "  Log mode is configured in include/ww_log.h by uncommenting one of:"
+	@echo "    - WW_LOG_MODE_STR      (String mode - printf-style)"
+	@echo "    - WW_LOG_MODE_ENCODE   (Encode mode - binary encoding)"
+	@echo "    - WW_LOG_MODE_DISABLED (All logging disabled)"
+	@echo ""
+	@echo -e "$(BLUE)Static Module Control:$(NC)"
+	@echo "  Disable modules at compile time (zero code size):"
+	@echo "    make STATIC_OPTS=\"-DWW_LOG_STATIC_MODULE_DEMO_EN=0\""
+	@echo "  Multiple modules:"
+	@echo "    make STATIC_OPTS=\"-DWW_LOG_STATIC_MODULE_DEMO_EN=0 -DWW_LOG_STATIC_MODULE_TEST_EN=0\""
 	@echo ""
 	@echo -e "$(BLUE)Targets:$(NC)"
-	@echo "  make              - Build with string mode (default)"
-	@echo "  make MODE=encode  - Build with encode mode"
-	@echo "  make run          - Build and run with current mode"
-	@echo "  make test-str     - Test string mode"
-	@echo "  make test-encode  - Test encode mode"
-	@echo "  make test-all     - Test all modes"
-	@echo "  make size-compare - Compare binary sizes across modes"
+	@echo "  make all- Build the project (default)"
+	@echo "  make run          - Build and run"
+	@echo "  make gen-log-ids  - Regenerate file ID mappings"
 	@echo "  make clean        - Remove build artifacts"
 	@echo "  make distclean    - Remove all generated files"
 	@echo "  make help         - Show this help"
 	@echo ""
 	@echo -e "$(BLUE)Examples:$(NC)"
-	@echo "  make MODE=str run       - Build and run string mode"
-	@echo "  make MODE=encode run    - Build and run encode mode"
-	@echo "  make test-all           - Test all three modes"
-	@echo "  make size-compare       - Compare binary sizes"
+	@echo "  make              - Build with current mode"
+	@echo "  make run          - Build and run"
+	@echo "  make clean all    - Clean rebuild"
 	@echo ""

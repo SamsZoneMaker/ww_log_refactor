@@ -1,18 +1,14 @@
 /**
  * @file main.c
- * @brief Test program for new logging system
- * @date 2025-11-29
+ * @brief Test program for new logging system (Auto File ID)
+ * @date 2025-12-17
  *
  * This test program demonstrates the new logging system design:
- * - Module-level coarse-grained + optional file-level fine-grained IDs
+ * - Automatic file ID injection via Makefile
  * - Unified LOG_XXX() API for both str and encode modes
  * - Compile-time mode selection via Makefile
+ * - No manual CURRENT_FILE_ID definition needed!
  */
-
-/* For encode mode: define a default log ID for this main file */
-#ifdef WW_LOG_MODE_ENCODE
-#define CURRENT_LOG_ID  0  /* Special ID for main/test files */
-#endif
 
 #include "ww_log.h"
 #include <stdio.h>
@@ -177,20 +173,20 @@ int main(void)
     /* ===== Direct Logging Tests ===== */
     print_test_header("Direct Logging Tests");
     printf("Testing LOG macros with DEFAULT module (module_id=0)...\n");
-    LOG_ERR(WW_LOG_MODULE_DEFAULT, "This is an error message");
-    LOG_WRN(WW_LOG_MODULE_DEFAULT, "This is a warning message");
-    LOG_INF(WW_LOG_MODULE_DEFAULT, "This is an info message");
-    LOG_DBG(WW_LOG_MODULE_DEFAULT, "This is a debug message");
+    LOG_ERR("This is an error message");
+    LOG_WRN("This is a warning message");
+    LOG_INF("This is an info message");
+    LOG_DBG("This is a debug message");
     print_separator();
 
     printf("Testing LOG macros with parameters (DEFAULT module)...\n");
-    LOG_INF(WW_LOG_MODULE_DEFAULT, "Integer value: %d", 12345);
-    LOG_INF(WW_LOG_MODULE_DEFAULT, "Multiple values: %d, %d, %d", 10, 20, 30);
+    LOG_INF("Integer value: %d", 12345);
+    LOG_INF("Multiple values: %d, %d, %d", 10, 20, 30);
     print_separator();
 
     printf("Testing LOG macros with different module IDs...\n");
-    LOG_ERR(WW_LOG_MODULE_TEST, "TEST module error message");
-    LOG_INF(WW_LOG_MODULE_APP, "APP module log: value=%d", 999);
+    LOG_ERR("TEST module error message");
+    LOG_INF("APP module log: value=%d", 999);
     print_separator();
 
 #if defined(WW_LOG_MODE_ENCODE) && defined(WW_LOG_ENCODE_RAM_BUFFER_EN)
@@ -213,8 +209,9 @@ int main(void)
     printf("=======================================\n");
     printf("\nTest Summary:\n");
     printf("- All 5 modules tested: DEMO, BROM, TEST, APP, DRIVERS\n");
-    printf("- Module-level IDs: DEMO(32-63), TEST(64-95), APP(96-127)\n");
-    printf("  DRV(128-159), BROM(160-191)\n");
+    printf("- Module-level IDs (64 files per module):\n");
+    printf("  DEFAULT(0-63), DEMO(64-127), TEST(128-191)\n");
+    printf("  APP(192-255), DRV(256-319), BROM(320-383)\n");
     printf("- File-level differentiation: Enabled in all modules\n");
     printf("- Optional module parameter: Defaults to [DEFA] when not specified\n");
     printf("- Both string and encode modes supported\n");

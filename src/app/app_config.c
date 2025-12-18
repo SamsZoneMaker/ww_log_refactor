@@ -1,24 +1,24 @@
 /**
  * @file app_config.c
- * @brief Application configuration module
+ * @brief Application configuration management
  * @date 2025-11-29
  */
 
-#define CURRENT_FILE_OFFSET  APP_FILE_CONFIG
 #include "app_in.h"
 
 void app_config_load(void)
 {
-    LOG_INF(CURRENT_LOG_PARAM, "Loading configuration...");
+    /* File ID is automatically injected by Makefile via -DCURRENT_FILE_ID=xxx */
+    LOG_INF("Loading configuration...");
 
-    LOG_DBG(CURRENT_LOG_PARAM, "Reading config file...");
-    LOG_INF(CURRENT_LOG_PARAM, "Configuration loaded successfully");
+    LOG_DBG("Reading config file...");
+    LOG_INF("Configuration loaded successfully");
 }
 
 void app_config_save(void)
 {
-    LOG_INF(CURRENT_LOG_PARAM, "Saving configuration...");
+    LOG_INF("Saving configuration...");
 
-    LOG_DBG(CURRENT_LOG_PARAM, "Writing config file...");
-    LOG_INF(CURRENT_LOG_PARAM, "Configuration saved successfully");
+    LOG_DBG("Writing config file...");
+    LOG_INF("Configuration saved successfully");
 }
