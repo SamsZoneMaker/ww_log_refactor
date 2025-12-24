@@ -1,1341 +1,807 @@
-# WW_LOG Phase2 设计方案
+# LOG模块 Phase2 设计方案
 
-## 文档信息
-- **版本**: v1.0
-- **日期**: 2025-12-10
-- **作者**: Architect Mode
-- **状态**: 设计阶段
+## 文档版本控制
 
----
-
-## 1. Phase2 目标概述
-
-### 1.1 Phase1 完成情况回顾
-Phase1已经完成:
-- ✅ 三种模式的准确输出 (STR/ENCODE/DISABLED)
-- ✅ 编译时和运行时开关功能
-- ✅ 模块级别的动态控制
-- ✅ 基础的encode模式实现
-
-### 1.2 Phase2 核心目标
-1. **多输出目标支持**: 支持同时输出到RAM和UART,可配置
-2. **RAM缓冲区管理**: 实现环形缓冲区,支持buffer满时自动翻转
-3. **热重启功能**: 重启后保留上一次的日志,不被刷掉
-4. **日志读取优化**: 批量读取二进制数据,PC端工具解析
-
-### 1.3 设计原则
-- **可配置性**: 通过宏定义灵活配置各项功能
-- **高效性**: 最小化临界区时间,减少性能影响
-- **可靠性**: ERROR日志优先保护,防止重要信息丢失
-- **易用性**: 提供简洁的API和命令行接口
+| 版本 | 日期 | 作者 | 修改说明 |
+|------|------|------|----------|
+| v1.0 | 2025-12-24 | Kilo Code | Phase2初始设计方案 |
 
 ---
 
-## 2. RAM缓冲区设计
+## 1. Phase2 需求概述
 
-### 2.1 数据结构设计
+### 1.1 核心需求
+
+Phase2主要实现encode模式下的持久化存储功能：
+
+1. **RAM缓冲区管理**
+   - 使用服务器项目预留的4KB RAM空间
+   - 实现Ring Buffer机制
+   - 当RAM使用达到3KB时触发外存写入
+   - 支持手动触发写入
+
+2. **外存支持**
+   - 支持EEPROM或Flash（互斥）
+   - 自动检测外存类型
+   - 实现LOG分区管理
+   - 处理擦除和写入操作
+
+3. **LOG表头设计**
+   - 区分每一份LOG数据
+   - 支持Ring Buffer翻转识别
+   - 包含必要的元数据
+
+4. **命令行接口**
+   - 6个核心指令实现LOG的读取、解析、写入、清除等操作
+
+5. **仿真系统**
+   - 使用文件系统模拟外存
+   - 模拟服务器项目的关键接口
+   - 验证核心逻辑正确性
+
+### 1.2 设计约束
+
+- RAM空间：4KB（DLM_MAINTAIN_LOG区域）
+- 外存LOG分区：4KB（可循环覆盖）
+- 触发阈值：3KB
+- 仿真方式：简化模拟（文件系统）
+
+---
+
+## 2. 系统架构设计
+
+### 2.1 整体架构
+
+```mermaid
+graph TB
+    A[LOG宏调用] --> B[ww_log_encode_output]
+    B --> C{RAM缓冲区}
+    C --> D{使用量>=3KB?}
+    D -->|是| E[触发外存写入]
+    D -->|否| F[继续缓存]
+    E --> G{检测外存类型}
+    G -->|EEPROM| H[EEPROM写入]
+    G -->|Flash| I[Flash写入]
+    H --> J[更新LOG表头]
+    I --> J
+    J --> K[清理已写入的RAM区域]
+
+    L[手动触发命令] --> E
+    M[命令行接口] --> N[读取/解析/管理]
+    N --> C
+    N --> G
+```
+
+### 2.2 模块划分
+
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| RAM缓冲区管理 | `ww_log_ram.c/h` | Ring Buffer实现、阈值检测 |
+| 外存抽象层 | `ww_log_storage.c/h` | 外存类型检测、统一读写接口 |
+| LOG表头管理 | `ww_log_header.c/h` | 表头格式定义、序列号管理 |
+| 命令行接口 | `ww_log_cmd.c/h` | 6个命令的实现 |
+| 仿真接口 | `sim/sim_storage.c/h` | 模拟外存、分区表等 |
+
+---
+
+## 3. RAM缓冲区详细设计
+
+### 3.1 内存布局
+
+```
+DLM_MAINTAIN_LOG区域 (4KB = 4096 bytes)
+┌─────────────────────────────────────────────────┐
+│ LOG Header (64 bytes)│  元数据区
+├─────────────────────────────────────────────────┤
+│ Ring Buffer Data (4032 bytes)                   │  数据区
+│ - 可存储约 1008 条LOG (每条4字节)                 │
+│ - 或 504 条带1个参数的LOG (每条8字节)             │
+└─────────────────────────────────────────────────┘
+
+触发阈值：3KB = 3072 bytes
+实际数据区使用达到 3008 bytes 时触发写入
+```
+
+### 3.2 数据结构定义
 
 ```c
 /**
- * 单条日志条目结构
- *
- * 说明:
- * - 每条日志包含1个编码头 + 最多16个参数
- * - 编码头包含: log_id, line, level, data_len
- * - 参数为32位整数,可以是任意数据
+ * RAM LOG Header (64 bytes)
+ * 位于DLM_MAINTAIN_LOG_BASE_ADDR
  */
 typedef struct {
-    U32 encoded_header;     // 编码的头部信息
-    U8  param_count;        // 实际参数个数 (0-16)
-    U8  flags;              // 标志位: bit0=已读, bit1=ERROR级别
-    U16 reserved;           // 保留,用于对齐
-    U32 params[16];         // 参数数组 (最多16个)
-} WW_LOG_ENTRY_T;
+    U32 magic;              // 魔数: 0x574C4F47 ('WLOG')
+    U32 version;            // 版本号: 0x00020000 (Phase2)
+    U16 write_index;        // 写指针（字节偏移）
+    U16 read_index;         // 读指针（字节偏移）
+    U32 total_written;      // 累计写入字节数
+    U32 flush_count;        // 刷新到外存次数
+    U32 last_flush_time;    // 最后刷新时间戳（可选）
+    U8  overflow_flag;      // 溢出标志
+    U8  reserved[39];       // 保留字节U32 checksum;           // 校验和（前60字节）
+} LOG_RAM_HEADER_T;
 
 /**
- * RAM缓冲区管理结构
- *
- * 说明:
- * - 使用环形缓冲区管理
- * - 支持热重启保留(通过魔数校验)
- * - 统计信息用于监控和调试
+ * Ring Buffer管理结构
  */
 typedef struct {
-    U32 magic_head;                // 魔数头: 0x574C4F47 ('WLOG')
-    U16 head;                                    // 读指针(最老的日志)
-    U16 tail;                                    // 写指针(下一条写入位置)
-    U32 write_count;                             // 累计写入计数
-    U32 read_count;                              // 累计读取计数
-    U32 overflow_count;                          // 溢出计数(丢弃的日志数)
-    U32 error_protected_count;                   // ERROR日志保护计数
-    U16 entry_size;                              // 缓冲区大小
-    U16 reserved;                                // 保留
-    WW_LOG_ENTRY_T entries[WW_LOG_RAM_BUFFER_SIZE];  // 日志条目数组
-    U32 magic_tail;                              // 魔数尾: 0x574C4F47
-} WW_LOG_RAM_BUFFER_T;
+    LOG_RAM_HEADER_T *header;   // 指向Header
+    U8 *data;                   // 指向数据区
+    U16 data_size;              // 数据区大小(4032)
+    U16 threshold;              // 触发阈值(3008)
+} LOG_RAM_BUFFER_T;
+```
+
+### 3.3 Ring Buffer操作
+
+```c
+/**
+ * 初始化RAM缓冲区
+ */
+void log_ram_init(void);
 
 /**
- * 标志位定义
+ * 写入LOG条目到RAM
+ * @return 0=成功, -1=失败, 1=需要刷新
  */
-#define WW_LOG_FLAG_READ        0x01    // 已读标志
-#define WW_LOG_FLAG_ERROR       0x02    // ERROR级别标志
-#define WW_LOG_FLAG_PROTECTED   0x04    // 受保护标志(不可覆盖)
-```
+int log_ram_write(U32 encoded, U32 *params, U8 param_count);
 
-### 2.2 内存布局
+/**
+ * 检查是否需要刷新到外存
+ */
+U8 log_ram_need_flush(void);
 
-```
-RAM缓冲区内存布局:
-┌─────────────────────────────────────────────────────────┐
-│ magic_head (4B)                                         │
-├─────────────────────────────────────────────────────────┤
-│ head (2B) | tail (2B)│
-├─────────────────────────────────────────────────────────┤
-│ write_count (4B)                                        │
-├─────────────────────────────────────────────────────────┤
-│ read_count (4B)                                         │
-├─────────────────────────────────────────────────────────┤
-│ overflow_count (4B)                                     │
-├─────────────────────────────────────────────────────────┤
-│ error_protected_count (4B)                              │
-├─────────────────────────────────────────────────────────┤
-│ entry_size (2B) | reserved (2B)                         │
-├─────────────────────────────────────────────────────────┤
-│ Entry[0]: encoded_header + param_count + flags + params │
-├─────────────────────────────────────────────────────────┤
-│ Entry[1]: ...                                           │
-├─────────────────────────────────────────────────────────┤
-│ ...                                                     │
-├─────────────────────────────────────────────────────────┤
-│ Entry[N-1]: ...                                         │
-├─────────────────────────────────────────────────────────┤
-│ magic_tail (4B)                                         │
-└─────────────────────────────────────────────────────────┘
+/**
+ * 获取当前使用量（字节）
+ */
+U16 log_ram_get_usage(void);
 
-总大小 = 32 + N * sizeof(WW_LOG_ENTRY_T)
-       = 32 + N * (4 + 1 + 1 + 2 + 16*4)
-       = 32 + N * 72 字节
+/**
+ * 读取RAM中的LOG数据
+ */
+int log_ram_read(U8 *buffer, U16 max_size, U16 *actual_size);
 
-默认N=128: 32 + 128*72 = 9248 字节 ≈ 9KB
-```
-
-### 2.3 环形缓冲区工作原理
-
-```
-初始状态 (空):
-  head=0, tail=0
-  ┌───┬───┬───┬───┬───┬───┬───┬───┐
-  │   │   │   │   │   │   │   │   │
-  └───┴───┴───┴───┴───┴───┴───┴───┘
-  ↑
- H/T
-
-写入3条后:
-  head=0, tail=3
-  ┌───┬───┬───┬───┬───┬───┬───┬───┐
-  │ 1 │ 2 │ 3 │   │   │   │   │   │
-  └───┴───┴───┴───┴───┴───┴───┴───┘
-   ↑           H           T
-
-读取1条后:
-  head=1, tail=3
-  ┌───┬───┬───┬───┬───┬───┬───┬───┐
-  │ R │ 2 │ 3 │   │   │   │   │   │
-  └───┴───┴───┴───┴───┴───┴───┴───┘
-       ↑       ↑
-       H       T
-
-写满后继续写(翻转):
-  head=1, tail=0 (tail追上head-1表示满)
-  ┌───┬───┬───┬───┬───┬───┬───┬───┐
-  │ 8 │ 2 │ 3 │ 4 │ 5 │ 6 │ 7 │ X │
-  └───┴───┴───┴───┴───┴───┴───┴───┘
-   ↑       ↑
-   T       H
-
-说明:
-- R = 已读
-- X = 被覆盖(如果不是ERROR或已读)
-- 数字 = 日志序号
+/**
+ * 清空已刷新的数据
+ */
+void log_ram_clear_flushed(U16 size);
 ```
 
 ---
 
-## 3. 热重启保留机制
+## 4. 外存管理详细设计
 
-### 3.1 设计思路
-
-使用链接脚本将RAM缓冲区放置在特殊的`.noinit`段,该段在热重启时不会被清零。通过魔数校验判断是冷启动还是热重启。
-
-### 3.2 链接脚本配置
-
-```ld
-/* 在链接脚本中添加 .noinit 段 */
-MEMORY
-{
-    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 256K
-    RAM (rwx)   : ORIGIN = 0x20000000, LENGTH = 60K
-    NOINIT (rw) : ORIGIN = 0x2000F000, LENGTH = 4K  /* 预留4K用于noinit */
-}
-
-SECTIONS
-{
-    /* 其他段定义... */
-
-    /* 不初始化段 - 热重启保留 */
-    .noinit (NOLOAD) :
-    {
-        . = ALIGN(4);
-        _noinit_start = .;
-        *(.noinit)
-        *(.noinit.*)
-        . = ALIGN(4);
-        _noinit_end = .;
-    } > NOINIT
-}
-```
-
-### 3.3 缓冲区声明
+### 4.1 外存类型检测
 
 ```c
 /**
- * 全局RAM缓冲区
- * 使用 __attribute__((section(".noinit"))) 放到特殊段
+ * 外存类型枚举
  */
-#ifdef WW_LOG_RAM_PERSISTENT
-__attribute__((section(".noinit")))
-static WW_LOG_RAM_BUFFER_T g_ww_log_ram_buffer;
+typedef enum {
+    EXT_MEM_NONE = 0,
+    EXT_MEM_EEPROM = 1,
+    EXT_MEM_FLASH = 2
+} EXT_MEM_TYPE_E;
+
+/**
+ * 检测外存类型
+ * 在实际项目中读取 REG_WW_STUS_SYS_INFO_U.sub.extMemType
+ * 在仿真系统中通过配置文件指定
+ */
+EXT_MEM_TYPE_E log_storage_detect_type(void);
+```
+
+### 4.2 分区表管理
+
+```c
+/**
+ * 分区表条目（简化版）
+ */
+typedef struct {
+    U32 part_offset;        // 分区起始地址
+    U32 part_size;          // 分区大小
+    U8  part_type;          // 分区类型（LOG=0x05）
+    U8  disk_type;          // 存储类型（EEPROM/FLASH）
+} PART_ENTRY_T;
+
+/**
+ * 分区表结构（简化版）
+ */
+typedef struct {
+    U32 magic;              // 魔数
+    U16 entry_count;        // 条目数量
+    PART_ENTRY_T entries[16]; // 最多16个分区
+} PART_TABLE_T;
+
+/**
+ * 获取LOG分区信息
+ * 模拟 pt_entry_get_by_key(pt, PART_ENTRY_TYPE_LOG, 0, 0)
+ */
+PART_ENTRY_T* log_storage_get_log_partition(void);
+
+/**
+ * 验证分区表有效性
+ * 模拟 pt_table_check_valid()
+ */
+U8 log_storage_check_partition_valid(PART_TABLE_T *pt);
+```
+
+### 4.3 统一读写接口
+
+```c
+/**
+ * 外存写入接口（统一）
+ * @param offset 相对于LOG分区的偏移
+ * @param data 数据指针
+ * @param size 数据大小
+ * @return 0=成功, <0=失败
+ */
+int log_storage_write(U32 offset, const U8 *data, U32 size);
+
+/**
+ * 外存读取接口（统一）
+ */
+int log_storage_read(U32 offset, U8 *data, U32 size);
+
+/**
+ * 擦除接口（Flash需要，EEPROM可为空操作）
+ */
+int log_storage_erase(U32 offset, U32 size);
+```
+
+---
+
+## 5. LOG表头格式设计
+
+### 5.1 外存LOG表头
+
+每次从RAM刷新到外存时，都会写入一个表头：
+
+```c
+/**
+ * 外存LOG块表头 (32 bytes)
+ */
+typedef struct {
+    U32 magic;              // 魔数: 0x4C4F4748 ('LOGH')
+    U32 sequence;           // 序列号（递增）
+    U32 timestamp;          // 时间戳（可选）
+    U16 data_size;          // 本块数据大小
+    U16 entry_count;        // LOG条目数量
+    U8  ram_overflow;       // RAM是否溢出
+    U8  reserved[11];       // 保留
+    U32 checksum;           // 校验和
+} LOG_BLOCK_HEADER_T;
+```
+
+### 5.2 外存布局
+
+```
+LOG分区 (4KB)
+┌─────────────────────────────────────────┐
+│ Block 0: Header (32B) + Data (up to 4064B) │
+├─────────────────────────────────────────┤
+│ 当Block 0写满后，从头覆盖（循环）        │
+└─────────────────────────────────────────┘
+
+实际策略：
+- 每次刷新写入一个完整的Block
+- 如果数据>4064B，分多次刷新
+- 使用sequence识别最新的LOG
+```
+
+### 5.3 序列号管理
+
+```c
+/**
+ * 全局序列号（持久化在RAM Header中）
+ */
+static U32 g_log_sequence = 0;
+
+/**
+ * 获取下一个序列号
+ */
+U32 log_header_get_next_sequence(void);
+
+/**
+ * 从外存扫描最大序列号（启动时恢复）
+ */
+U32 log_header_scan_max_sequence(void);
+```
+
+---
+
+## 6. 命令行接口设计
+
+### 6.1 命令列表
+
+| 命令 | 格式 | 功能 |
+|------|------|------|
+| log_ram_dump | `log_ram_dump` | 从RAM读取LOG并以HEX显示 |
+| log_ram_parse | `log_ram_parse` | 从RAM读取LOG并解析显示 |
+| log_ram_flush | `log_ram_flush` | 手动触发RAM到外存写入 |
+| log_ext_dump | `log_ext_dump [seq]` | 从外存读取LOG（可指定序列号） |
+| log_ext_parse | `log_ext_parse [seq]` | 从外存读取并解析LOG |
+| log_clear_all | `log_clear_all` | 清除所有LOG（RAM+外存） |
+
+### 6.2 命令实现框架
+
+```c
+/**
+ * 命令处理函数类型
+ */
+typedef void (*LOG_CMD_HANDLER)(const char *args);
+
+/**
+ * 命令表条目
+ */
+typedef struct {
+    const char *cmd_name;
+    LOG_CMD_HANDLER handler;
+    const char *help_text;
+} LOG_CMD_ENTRY_T;
+
+/**
+ * 命令分发器
+ */
+void log_cmd_dispatch(const char *cmd_line);
+
+/**
+ * 各命令实现
+ */
+void log_cmd_ram_dump(const char *args);
+void log_cmd_ram_parse(const char *args);
+void log_cmd_ram_flush(const char *args);
+void log_cmd_ext_dump(const char *args);
+void log_cmd_ext_parse(const char *args);
+void log_cmd_clear_all(const char *args);
+```
+
+### 6.3 输出格式示例
+
+**log_ram_dump输出：**
+```
+=== RAM LOG DUMP ===
+Usage: 1024/4032 bytes (25%)
+Entries: ~256
+---
+0x00C80015 0x00000001
+0x00C80023 0x00000002 0x00000003
+...
+```
+
+**log_ram_parse输出：**
+```
+=== RAM LOG PARSED ===
+[0000] [INF] demo_init.c:21 - Params: 0x00000001
+[0001] [ERR] demo_init.c:35 - Params: 0x00000002 0x00000003
+...
+```
+
+**log_ext_dump输出：**
+```
+=== EXTERNAL LOG DUMP ===
+Storage: EEPROM
+Partition: 0x1A00, Size: 4096 bytes
+Latest Sequence: 5
+---
+Block #5 (1024 bytes, 256 entries):
+0x00C80015 0x00000001
+...
+```
+
+---
+
+## 7. 仿真接口设计
+
+### 7.1 仿真目标
+
+在PC环境下模拟服务器项目的关键接口，验证LOG模块逻辑：
+
+1. **RAM区域模拟**：使用静态数组或malloc
+2. **外存模拟**：使用文件系统（eeprom.bin / flash.bin）
+3. **分区表模拟**：使用JSON配置文件
+4. **寄存器模拟**：使用全局变量
+
+### 7.2 仿真接口实现
+
+```c
+/* ========== RAM模拟 ========== */
+#ifdef SIMULATION_MODE
+// 使用静态数组模拟DLM区域
+static U8 g_sim_dlm_memory[4096];
+#define DLM_MAINTAIN_LOG_BASE_ADDR  ((U32)g_sim_dlm_memory)
+#define DLM_MAINTAIN_LOG_SIZE       4096
 #else
-static WW_LOG_RAM_BUFFER_T g_ww_log_ram_buffer;
+// 实际硬件地址（由链接脚本定义）
+extern U8 __dlm_log_start;
+#define DLM_MAINTAIN_LOG_BASE_ADDR  ((U32)&__dlm_log_start)
+#define DLM_MAINTAIN_LOG_SIZE       4096
+#endif
+
+/* ========== 外存类型寄存器模拟 ========== */
+#ifdef SIMULATION_MODE
+typedef struct {
+    U8 extMemType;  // 0=None, 1=EEPROM, 2=Flash
+} SIM_SYS_INFO_T;
+
+extern SIM_SYS_INFO_T g_sim_sys_info;
+
+#define REG_WW_STUS_SYS_INFO_U  g_sim_sys_info
+#else
+// 实际硬件寄存器
+extern volatile SYS_INFO_REG_T REG_WW_STUS_SYS_INFO_U;
+#endif
+
+/* ========== 分区表接口模拟 ========== */
+#ifdef SIMULATION_MODE
+PART_TABLE_T* sim_pt_info_read(void);
+PART_ENTRY_T* sim_pt_entry_get_by_key(PART_TABLE_T *pt, U8 type, U8 p1, U8 p2);
+U8 sim_pt_table_check_valid(PART_TABLE_T *pt);
+
+#define pt_info_read()  sim_pt_info_read()
+#define pt_entry_get_by_key  sim_pt_entry_get_by_key
+#define pt_table_check_valid  sim_pt_table_check_valid
+#else
+// 实际项目接口
+#include "init_ex.h"
+#include "apiredun_ex.h"
+#endif
+
+/* ========== 外存读写接口模拟 ========== */
+#ifdef SIMULATION_MODE
+int sim_eeprom_write(U32 offset, const U8 *data, U32 size);
+int sim_eeprom_read(U32 offset, U8 *data, U32 size);
+int sim_flash_write(U32 offset, const U8 *data, U32 size);
+int sim_flash_read(U32 offset, U8 *data, U32 size);
+int sim_flash_erase(U32 offset, U32 size);
+
+#define svc_eeprom_acc_write  sim_eeprom_write
+#define svc_eeprom_acc_read   sim_eeprom_read
+#define svc_flash_acc_write   sim_flash_write
+#define svc_flash_acc_read    sim_flash_read
+#define svc_flash_acc_erase   sim_flash_erase
+#else
+// 实际项目接口
+#include "svc_ex.h"
 #endif
 ```
 
-### 3.4 初始化逻辑
+### 7.3 仿真配置文件
+
+**sim_config.json:**
+```json
+{
+  "system": {
+    "ext_mem_type": "EEPROM",
+    "comment": "EEPROM or FLASH"
+  },
+  "partition_table": {
+    "magic": "0x50415254",
+    "entries": [
+      {
+        "type": "LOG",
+        "type_code": 5,
+        "offset": "0x1A00",
+        "size": "0x1000",
+        "disk_type": "EEPROM"
+      }
+    ]
+  },
+  "storage_files": {
+    "eeprom": "sim_data/eeprom.bin",
+    "flash": "sim_data/flash.bin"
+  }
+}
+```
+
+### 7.4 仿真实现要点
+
+1. **文件系统模拟外存**
+   - 创建固定大小的二进制文件
+   - 支持随机读写
+   - Flash模拟：写入前检查是否已擦除（0xFF）
+
+2. **分区表加载**
+   - 启动时从JSON加载配置
+   - 构建内存中的分区表结构
+
+3. **简化的特性**
+   - 不模拟读写延迟
+   - 不模拟EEPROM写入次数限制
+   - 不模拟Flash坏块管理
+
+---
+
+## 8. 实现流程设计
+
+### 8.1 LOG写入流程
+
+```mermaid
+graph TD
+    A[LOG_XXX宏调用] --> B[ww_log_encode_output]
+    B --> C[编码LOG数据]
+    C --> D[log_ram_write]
+    D --> E{RAM使用>=3KB?}
+    E -->|否| F[写入成功返回]
+    E -->|是| G[log_ram_flush_to_storage]
+    G --> H[检测外存类型]
+    H --> I[获取LOG分区信息]
+    I --> J[构建LOG块表头]
+    J --> K[写入外存]
+    K --> L[更新序列号]
+    L --> M[清理RAM已写入数据]
+    M --> F
+```
+
+### 8.2 LOG读取流程
+
+```mermaid
+graph TD
+    A[命令: log_ext_parse] --> B[检测外存类型]
+    B --> C[获取LOG分区]
+    C --> D[扫描所有块表头]
+    D --> E[找到最大序列号]
+    E --> F[读取对应块数据]
+    F --> G[解析LOG条目]
+    G --> H[查找文件ID映射]
+    H --> I[格式化输出]
+```
+
+### 8.3 启动初始化流程
+
+```mermaid
+graph TD
+    A[系统启动] --> B[log_ram_init]
+    B --> C{检查RAM Header魔数}
+    C -->|有效| D[保留现有数据]
+    C -->|无效| E[初始化Header]
+    D --> F[从外存扫描最大序列号]
+    E --> F
+    F --> G[恢复序列号计数器]
+    G --> H[初始化完成]
+```
+
+---
+
+## 9. 关键算法设计
+
+### 9.1 Ring Buffer写入算法
 
 ```c
-/**
- * RAM缓冲区初始化
- *
- * @param force_clear  强制清空: 1=清空, 0=尝试保留
- *
- * 返回值:
- *   0 = 冷启动(已清空)
- *   1 = 热重启(保留了日志)
- */
-int ww_log_ram_init(U8 force_clear)
+int log_ram_write(U32 encoded, U32 *params, U8 param_count)
 {
-    U8 warm_restart = 0;
+    LOG_RAM_BUFFER_T *buf = &g_log_ram_buffer;
+    U16 write_idx = buf->header->write_index;
+    U16 data_size = buf->data_size;
+    U16 required = 4 + param_count * 4;  // 需要的字节数
 
-#ifdef WW_LOG_RAM_PERSISTENT
-    // 检查魔数
-    if (!force_clear &&
-        g_ww_log_ram_buffer.magic_head == WW_LOG_RAM_MAGIC &&
-        g_ww_log_ram_buffer.magic_tail == WW_LOG_RAM_MAGIC) {
+    // 检查是否需要翻转
+    if (write_idx + required > data_size) {
+        // 标记溢出，从头开始写
+        buf->header->overflow_flag = 1;
+        write_idx = 0;
+    }
 
-        // 进一步检查数据一致性
-        if (g_ww_log_ram_buffer.head < g_ww_log_ram_buffer.entry_size &&
-            g_ww_log_ram_buffer.tail < g_ww_log_ram_buffer.entry_size &&
-            g_ww_log_ram_buffer.entry_size == WW_LOG_RAM_BUFFER_SIZE) {
+    // 写入编码LOG*(U32*)(buf->data + write_idx) = encoded;
+    write_idx += 4;
 
-            warm_restart = 1;
-            printf("LOG: Warm restart - %u logs preserved\n",
-                   ww_log_ram_get_count());
+    // 写入参数
+    for (U8 i = 0; i < param_count; i++) {
+        *(U32*)(buf->data + write_idx) = params[i];
+        write_idx += 4;
+    }
+
+    // 更新写指针
+    buf->header->write_index = write_idx;
+    buf->header->total_written += required;
+
+    // 检查是否需要刷新
+    if (write_idx >= buf->threshold) {
+        return 1;  // 需要刷新
+    }
+
+    return 0;  // 成功
+}
+```
+
+### 9.2 外存循环覆盖算法
+
+```c
+int log_storage_write_block(const U8 *data, U16 size)
+{
+    PART_ENTRY_T *part = log_storage_get_log_partition();
+    U32 block_offset = 0;  // 简化：总是写到分区开头
+
+    // 构建块表头
+    LOG_BLOCK_HEADER_T header;
+    header.magic = 0x4C4F4748;
+    header.sequence = log_header_get_next_sequence();
+    header.data_size = size;
+    // ... 填充其他字段
+
+    // Flash需要先擦除
+    if (g_ext_mem_type == EXT_MEM_FLASH) {
+        log_storage_erase(block_offset, 4096);
+    }
+
+    // 写入表头
+    log_storage_write(block_offset, (U8*)&header, sizeof(header));
+
+    // 写入数据
+    log_storage_write(block_offset + sizeof(header), data, size);
+
+    return 0;
+}
+```
+
+### 9.3 LOG解析算法
+
+```c
+void log_parse_entry(U32 encoded, U32 *params, U8 param_count)
+{
+    // 解码
+    U16 log_id = (encoded >> 20) & 0xFFF;
+    U16 line = (encoded >> 8) & 0xFFF;
+    U8 level = encoded & 0x3;
+
+    // 查找文件名
+    U8 module_id = log_id >> 6;
+    const char *file_name = log_get_file_name(log_id);
+    const char *level_str = log_get_level_str(level);
+
+    // 输出
+    printf("[%s] %s:%d", level_str, file_name, line);
+
+    if (param_count > 0) {
+        printf(" - Params:");
+        for (U8 i = 0; i < param_count; i++) {
+            printf(" 0x%08X", params[i]);
         }
     }
-#endif
-
-    if (!warm_restart) {
-        // 冷启动或数据损坏,初始化缓冲区
-        memset(&g_ww_log_ram_buffer, 0, sizeof(g_ww_log_ram_buffer));
-        g_ww_log_ram_buffer.magic_head = WW_LOG_RAM_MAGIC;
-        g_ww_log_ram_buffer.magic_tail = WW_LOG_RAM_MAGIC;
-        g_ww_log_ram_buffer.entry_size = WW_LOG_RAM_BUFFER_SIZE;
-        printf("LOG: Cold start - RAM buffer initialized\n");
-    }
-
-    return warm_restart;
-}
-```
-
----
-
-## 4. 输出目标配置系统
-
-### 4.1 配置宏定义
-
-```c
-/* ww_log_config.h */
-
-/**
- * 输出目标配置
- * 可以同时启用多个输出目标
- */
-#define WW_LOG_OUTPUT_UART_EN       1    // 启用UART输出
-#define WW_LOG_OUTPUT_RAM_EN        1    // 启用RAM缓冲
-// #define WW_LOG_OUTPUT_FLASH_EN   0    // Flash输出(Phase3)
-
-/**
- * RAM缓冲区配置
- */
-#define WW_LOG_RAM_BUFFER_SIZE      128  // 缓冲区条目数
-#define WW_LOG_RAM_PERSISTENT       1    // 热重启保留
-
-/**
- * ERROR日志保护策略
- */
-#define WW_LOG_ERROR_PROTECT_EN     1    // 启用ERROR保护
-#define WW_LOG_ERROR_MAX_UNREAD     32   // 最多保留32条未读ERROR
-```
-
-### 4.2 输出函数重构
-
-```c
-/**
- * 核心输出函数 - 支持多输出目标
- */
-void ww_log_encode_output(U16 log_id, U16 line, U8 level,
-                          U8 param_count, ...)
-{
-    U32 encoded_header;
-    U32 params[16];
-    va_list args;
-    int i;
-
-    // 1. 模块过滤
-    U8 module_id = WW_LOG_GET_MODULE_ID(log_id);
-    if (!ww_log_is_module_enabled(module_id)) {
-        return;
-    }
-
-    // 2. 级别过滤
-    if (level > g_ww_log_level_threshold) {
-        return;
-    }
-
-    // 3. 编码头部
-    encoded_header = WW_LOG_ENCODE(log_id, line, param_count, level);
-
-    // 4. 提取参数
-    va_start(args, param_count);
-    for (i = 0; i < param_count && i < 16; i++) {
-        params[i] = va_arg(args, U32);
-    }
-    va_end(args);
-
-    // 5. 输出到各个目标
-#ifdef WW_LOG_OUTPUT_UART_EN
-    ww_log_output_uart(encoded_header, params, param_count);
-#endif
-
-#ifdef WW_LOG_OUTPUT_RAM_EN
-    ww_log_output_ram(encoded_header, params, param_count, level);
-#endif
-}
-```
-
-### 4.3 UART输出实现
-
-```c
-/**
- * UART输出函数
- * 格式: [编码头] [参数1] [参数2] ... \n
- */
-static void ww_log_output_uart(U32 encoded_header, U32 *params, U8 count)
-{
-    printf("LOG:%08X", encoded_header);
-
-    for (int i = 0; i < count; i++) {
-        printf(",%08X", params[i]);
-    }
-
     printf("\n");
 }
 ```
 
 ---
 
-## 5. 环形缓冲区管理算法
+## 10. 错误处理设计
 
-### 5.1 核心函数设计
-
-#### 5.1.1 写入函数
+### 10.1 错误码定义
 
 ```c
-/**
- * 向RAM缓冲区写入日志
- *
- * @param encoded_header  编码的头部
- * @param params          参数数组
- * @param param_count     参数个数
- * @param level           日志级别
- *
- * @return 0=成功, -1=失败
- */
-int ww_log_output_ram(U32 encoded_header, U32 *params,
-                      U8 param_count, U8 level)
-{
-    WW_LOG_ENTRY_T *entry;
-    U16 next_tail;
-    U8 is_error = (level == WW_LOG_LEVEL_ERR);
-
-    // 进入临界区
-    ENTER_CRITICAL_SECTION();
-
-    // 检查是否满
-    next_tail = (g_ww_log_ram_buffer.tail + 1) %
-                g_ww_log_ram_buffer.entry_size;
-
-    if (next_tail == g_ww_log_ram_buffer.head) {
-        // 缓冲区满,需要覆盖
-        if (!ww_log_can_overwrite(g_ww_log_ram_buffer.head, is_error)) {
-            // 不能覆盖,丢弃新日志
-            g_ww_log_ram_buffer.overflow_count++;
-            EXIT_CRITICAL_SECTION();
-            return -1;
-        }
-
-        // 可以覆盖,head前移
-        g_ww_log_ram_buffer.head =
-            (g_ww_log_ram_buffer.head + 1) %
-            g_ww_log_ram_buffer.entry_size;
-        g_ww_log_ram_buffer.overflow_count++;
-    }
-
-    // 写入数据
-    entry = &g_ww_log_ram_buffer.entries[g_ww_log_ram_buffer.tail];
-    entry->encoded_header = encoded_header;
-    entry->param_count = param_count;
-    entry->flags = 0;
-
-    if (is_error) {
-        entry->flags |= WW_LOG_FLAG_ERROR;
-    }
-
-    // 复制参数
-    for (int i = 0; i < param_count && i < 16; i++) {
-        entry->params[i] = params[i];
-    }
-
-    // 更新tail
-    g_ww_log_ram_buffer.tail = next_tail;
-    g_ww_log_ram_buffer.write_count++;
-
-    EXIT_CRITICAL_SECTION();
-
-    return 0;
-}
+typedef enum {
+    LOG_ERR_OK = 0,
+    LOG_ERR_NO_SPACE = -1,
+    LOG_ERR_INVALID_PARAM = -2,
+    LOG_ERR_STORAGE_FAIL = -3,
+    LOG_ERR_NO_PARTITION = -4,
+    LOG_ERR_CHECKSUM_FAIL = -5,
+    LOG_ERR_NOT_INITIALIZED = -6
+} LOG_ERROR_CODE_E;
 ```
 
-#### 5.1.2 覆盖策略
+### 10.2 异常场景处理
 
-```c
-/**
- * 判断是否可以覆盖指定位置的日志
- *
- * @param index     要检查的索引
- * @param is_error  当前要写入的是否为ERROR
- *
- * @return 1=可以覆盖, 0=不可覆盖
- */
-static U8 ww_log_can_overwrite(U16 index, U8 is_error)
-{
-    WW_LOG_ENTRY_T *entry = &g_ww_log_ram_buffer.entries[index];
-
-#ifdef WW_LOG_ERROR_PROTECT_EN
-    // ERROR日志保护策略
-    if (entry->flags & WW_LOG_FLAG_ERROR) {
-        // 如果是未读的ERROR,不能覆盖
-        if (!(entry->flags & WW_LOG_FLAG_READ)) {
-            // 统计未读ERROR数量
-            U16 unread_errors = ww_log_count_unread_errors();
-            // 如果未读ERROR超过阈值,允许覆盖最老的
-            if (unread_errors >= WW_LOG_ERROR_MAX_UNREAD) {
-                g_ww_log_ram_buffer.error_protected_count++;
-                return 1;
-            }
-
-            return 0;  // 不能覆盖
-        }
-    }
-#endif
-
-    // 非ERROR或已读,可以覆盖
-    return 1;
-}
-```
-
-#### 5.1.3 读取函数
-
-```c
-/**
- * 从RAM缓冲区读取一条日志
- *
- * @param entry  输出参数,保存读取的日志
- *
- * @return 0=成功, -1=缓冲区为空
- */
-int ww_log_ram_read_entry(WW_LOG_ENTRY_T *entry)
-{
-    if (entry == NULL) {
-        return -1;
-    }
-
-    ENTER_CRITICAL_SECTION();
-
-    // 检查是否为空
-    if (g_ww_log_ram_buffer.head == g_ww_log_ram_buffer.tail) {
-        EXIT_CRITICAL_SECTION();
-        return -1;
-    }
-
-    // 复制数据
-    memcpy(entry,
-           &g_ww_log_ram_buffer.entries[g_ww_log_ram_buffer.head],
-           sizeof(WW_LOG_ENTRY_T));
-
-    // 标记为已读
-    g_ww_log_ram_buffer.entries[g_ww_log_ram_buffer.head].flags |=
-        WW_LOG_FLAG_READ;
-
-    // head前移
-    g_ww_log_ram_buffer.head =
-        (g_ww_log_ram_buffer.head + 1) %
-        g_ww_log_ram_buffer.entry_size;
-
-    g_ww_log_ram_buffer.read_count++;
-
-    EXIT_CRITICAL_SECTION();
-
-    return 0;
-}
-```
-
-#### 5.1.4 批量读取函数
-
-```c
-/**
- * 批量读取日志(用于导出)
- *
- * @param buffer     输出缓冲区
- * @param max_count  最多读取的条目数
- *
- * @return 实际读取的条目数
- */
-int ww_log_ram_read_batch(WW_LOG_ENTRY_T *buffer, U16 max_count)
-{
-    U16 count = 0;
-
-    if (buffer == NULL || max_count == 0) {
-        return 0;
-    }
-
-    while (count < max_count) {
-        if (ww_log_ram_read_entry(&buffer[count]) != 0) {
-            break;  // 缓冲区已空
-        }
-        count++;
-    }
-
-    return count;
-}
-```
+| 场景 | 处理策略 |
+|------|----------|
+| RAM写满但外存不可用 | 丢弃最老的LOG，继续写入新LOG |
+| 外存写入失败 | 重试3次，失败后标记错误但不阻塞 |
+| 分区表损坏 | 使用默认分区配置 |
+| 校验和错误 | 跳过该块，继续读取下一块 |
+| 序列号翻转 | 使用32位序列号，足够长时间不翻转 |
 
 ---
 
-## 6. 日志读取API接口
+## 11. 性能评估
 
-### 6.1 统计信息API
+### 11.1 内存占用
 
-```c
-/**
- * 日志缓冲区统计信息
- */
-typedef struct {
-    U16 total_size;         // 缓冲区总大小
-    U16 used_count;         // 当前使用的条目数
-    U32 write_count;        // 累计写入次数
-    U32 read_count;         // 累计读取次数
-    U32 overflow_count;     // 溢出次数
-    U32 error_protected;    // ERROR保护次数
-} WW_LOG_RAM_INFO_T;
-
-/**
- * 获取RAM缓冲区统计信息
- */
-void ww_log_ram_get_info(WW_LOG_RAM_INFO_T *info)
-{
-    if (info == NULL) {
-        return;
-    }
-    ENTER_CRITICAL_SECTION();
-
-    info->total_size = g_ww_log_ram_buffer.entry_size;
-    info->used_count = ww_log_ram_get_count();
-    info->write_count = g_ww_log_ram_buffer.write_count;
-    info->read_count = g_ww_log_ram_buffer.read_count;
-    info->overflow_count = g_ww_log_ram_buffer.overflow_count;
-    info->error_protected = g_ww_log_ram_buffer.error_protected_count;
-
-    EXIT_CRITICAL_SECTION();
-}
-```
-
-### 6.2 导出API
-
-```c
-/**
- * 导出所有日志到缓冲区(不删除)
- *
- * @param buffer     输出缓冲区
- * @param max_count  缓冲区大小
- *
- * @return 实际导出的条目数
- */
-int ww_log_ram_export(WW_LOG_ENTRY_T *buffer, U16 max_count)
-{
-    U16 count = 0;
-    U16 index;
-
-    if (buffer == NULL || max_count == 0) {
-        return 0;
-    }
-
-    ENTER_CRITICAL_SECTION();
-
-    index = g_ww_log_ram_buffer.head;
-
-    while (index != g_ww_log_ram_buffer.tail && count < max_count) {
-        memcpy(&buffer[count],
-               &g_ww_log_ram_buffer.entries[index],
-               sizeof(WW_LOG_ENTRY_T));
-
-        index = (index + 1) % g_ww_log_ram_buffer.entry_size;
-        count++;
-    }
-
-    EXIT_CRITICAL_SECTION();
-
-    return count;
-}
-```
-
-### 6.3 清空API
-
-```c
-/**
- * 清空RAM缓冲区
- */
-void ww_log_ram_clear(void)
-{
-    ENTER_CRITICAL_SECTION();
-
-    g_ww_log_ram_buffer.head = 0;
-    g_ww_log_ram_buffer.tail = 0;
-
-    // 可选: 清空所有条目
-    memset(g_ww_log_ram_buffer.entries, 0,
-           sizeof(WW_LOG_ENTRY_T) * g_ww_log_ram_buffer.entry_size);
-
-    EXIT_CRITICAL_SECTION();
-}
-```
-
----
-
-## 7. UART命令行接口
-
-### 7.1 命令定义
-
-```c
-/**
- * 支持的命令:
- * - log info          : 显示缓冲区统计信息
- * - log read <n>      : 读取n条日志
- * - log export        : 导出所有日志
- * - log clear         : 清空缓冲区
- * - log dump          : 以十六进制格式dump所有日志
- */
-```
-
-### 7.2 命令处理函数
-
-```c
-/**
- * 命令行处理函数
- */
-void ww_log_cmd_handler(const char *cmd)
-{
-    if (strncmp(cmd, "log info", 8) == 0) {
-        ww_log_cmd_info();
-    }
-    else if (strncmp(cmd, "log read", 8) == 0) {
-        int n = atoi(cmd + 9);
-        ww_log_cmd_read(n);
-    }
-    else if (strncmp(cmd, "log export", 10) == 0) {
-        ww_log_cmd_export();
-    }
-    else if (strncmp(cmd, "log clear", 9) == 0) {
-        ww_log_cmd_clear();
-    }
-    else if (strncmp(cmd, "log dump", 8) == 0) {
-        ww_log_cmd_dump();
-    }
-    else {
-        printf("Unknown log command\n");
-        printf("Usage:\n");
-        printf("  log info          - Show buffer statistics\n");
-        printf("  log read <n>      - Read n log entries\n");
-        printf("  log export        - Export all logs\n");
-        printf("  log clear         - Clear buffer\n");
-        printf("  log dump          - Dump all logs in hex\n");
-    }
-}
-```
-
-### 7.3 命令实现
-
-```c
-/**
- * info命令: 显示统计信息
- */
-static void ww_log_cmd_info(void)
-{
-    WW_LOG_RAM_INFO_T info;
-
-    ww_log_ram_get_info(&info);
-
-    printf("\n=== Log Buffer Info ===\n");
-    printf("Total Size    : %u\n", info.total_size);
-    printf("Used Count    : %u\n", info.used_count);
-    printf("Write Count   : %u\n", info.write_count);
-    printf("Read Count    : %u\n", info.read_count);
-    printf("Overflow Count: %u\n", info.overflow_count);
-    printf("Error Protected: %u\n", info.error_protected);
-    printf("=======================\n\n");
-}
-
-/**
- * read命令: 读取n条日志
- */
-static void ww_log_cmd_read(int n)
-{
-    WW_LOG_ENTRY_T entry;
-    int count = 0;
-
-    if (n <= 0 || n > 100) {
-        printf("Invalid count (1-100)\n");
-        return;
-    }
-
-    printf("\n=== Reading %d logs ===\n", n);
-
-    while (count < n) {
-        if (ww_log_ram_read_entry(&entry) != 0) {
-            break;  // 缓冲区已空
-        }
-
-        // 输出格式: [序号] 编码头 参数1 参数2 ...
-        printf("[%03d] %08X", count, entry.encoded_header);
-
-        for (int i = 0; i < entry.param_count; i++) {
-            printf(" %08X", entry.params[i]);
-        }
-
-        printf("\n");
-        count++;
-    }
-
-    printf("=== Read %d logs ===\n\n", count);
-}
-
-/**
- * export命令: 导出所有日志(不删除)
- */
-static void ww_log_cmd_export(void)
-{
-    WW_LOG_ENTRY_T buffer[128];  // 临时缓冲区
-    int count;
-
-    count = ww_log_ram_export(buffer, 128);
-
-    printf("\n=== Exporting %d logs ===\n", count);
-
-    for (int i = 0; i < count; i++) {
-        printf("[%03d] %08X", i, buffer[i].encoded_header);
-
-        for (int j = 0; j < buffer[i].param_count; j++) {
-            printf(" %08X", buffer[i].params[j]);
-        }
-
-        printf("\n");
-    }
-
-    printf("=== Export complete ===\n\n");
-}
-
-/**
- * dump命令: 以二进制格式dump(用于工具解析)
- */
-static void ww_log_cmd_dump(void)
-{
-    WW_LOG_ENTRY_T buffer[128];
-    int count;
-
-    count = ww_log_ram_export(buffer, 128);
-
-    printf("\n=== Dumping %d logs (binary format) ===\n", count);
-
-    // 输出二进制数据,每行一条日志
-    for (int i = 0; i < count; i++) {
-        // 输出编码头
-        printf("BIN:%08X", buffer[i].encoded_header);
-
-        // 输出参数个数
-        printf(":%02X", buffer[i].param_count);
-
-        // 输出所有参数
-        for (int j = 0; j < buffer[i].param_count; j++) {
-            printf(":%08X", buffer[i].params[j]);
-        }
-
-        printf("\n");
-    }
-
-    printf("=== Dump complete ===\n\n");
-}
-```
-
----
-
-## 8. 临界区保护机制
-
-### 8.1 保护方案选择
-
-```c
-/* ww_log_critical.h */
-
-#ifdef USE_RTOS
-    // RTOS环境: 使用互斥锁
-    #include "cmsis_os.h"
-
-    extern osMutexId_t g_log_mutex;
-
-    #define ENTER_CRITICAL_SECTION()  osMutexAcquire(g_log_mutex, osWaitForever)
-    #define EXIT_CRITICAL_SECTION()   osMutexRelease(g_log_mutex)
-    #define INIT_CRITICAL_SECTION() \
-        do { \
-            g_log_mutex = osMutexNew(NULL); \
-        } while(0)
-
-#else
-    // 裸机环境: 使用关中断
-    #ifdef __ARM_ARCH
-        #define ENTER_CRITICAL_SECTION() \do { \
-                __disable_irq(); \
-            } while(0)
-
-        #define EXIT_CRITICAL_SECTION() \
-            do { \
-                __enable_irq(); \
-            } while(0)
-    #else
-        #error "Unsupported architecture for critical section"
-    #endif
-    #define INIT_CRITICAL_SECTION()  // 裸机无需初始化
-#endif
-```
-
-### 8.2 临界区优化原则
-
-1. **最小化临界区时间**
-   - 只保护必须的操作
-   - 在临界区外完成准备工作
-   - 避免在临界区内调用耗时函数
-
-2. **避免嵌套临界区**
-   - 防止死锁
-   - 简化代码逻辑
-
-3. **中断中的特殊处理**
-   - ISR中不能使用互斥锁
-   - 提供专门的ISR版本函数
-
-```c
-/**
- * ISR专用的日志写入函数
- */
-#ifdef USE_RTOS
-int ww_log_output_ram_isr(U32 encoded_header, U32 *params, U8 param_count, U8 level)
-{
-    // 在ISR中使用关中断而不是互斥锁
-    __disable_irq();
-
-    // ... 写入逻辑与普通函数相同
-
-    __enable_irq();
-
-    return 0;
-}
-#endif
-```
-
----
-
-## 9. 日志读取方式说明
-
-### 9.1 设计思路
-
-你提出的"一份一份往外读,然后用解析工具解析"的思路是**完全正确的**,这是最优的设计方案。
-
-### 9.2 优势分析
-
-1. **简化嵌入式端逻辑**
-   - 设备端只需要输出原始二进制数据
-   - 不需要复杂的格式化和字符串处理
-   - 减少代码空间和RAM占用
-
-2. **提高传输效率**
-   - 二进制数据比文本更紧凑
-   - 减少UART传输时间
-   - 降低通信开销
-
-3. **灵活的PC端处理**
-   - 可以实现复杂的过滤和分析
-   - 支持多种输出格式
-   - 易于扩展新功能
-
-4. **离线分析能力**
-   - 可以保存原始数据后续分析
-   - 支持批量处理
-   - 便于问题追溯
-
-### 9.3 读取流程
-
-```mermaid
-graph LR
-    A[嵌入式设备] -->|UART| B[PC串口工具]
-    B --> C[接收二进制数据]
-    C --> D[解析工具]
-    D --> E[文件ID映射]
-    D --> F[格式化输出]
-    F --> G[可读日志文件]
-    F --> H[统计分析]
-    F --> I[过滤查询]
-```
-
-### 9.4 数据格式
-
-**UART输出格式:**
-```
-LOG:编码头,参数1,参数2,...\n
-```
-
-**示例:**
-```
-LOG:00C80F02,00000064,000003E8
-LOG:01900A01,DEADBEEF
-LOG:02100501
-```
-
-**解析后:**
-```
-[ERR] app_main.c:15 | Params: 0x00000064 0x000003E8
-[WRN] drv_i2c.c:10 | Params: 0xDEADBEEF
-[INF] demo_init.c:5
-```
-
-### 9.5 与设计文档的对比
-
-设计文档中提到的"单独读某一行日志"的方式确实不够高效。我们的批量读取方案更优:
-
-| 方案 | 优点 | 缺点 |
+| 项目 | 大小 | 说明 |
 |------|------|------|
-| 单行读取 | 实现简单 | 效率低,开销大 |
-| 批量读取 | 高效,灵活 | 需要缓冲区 |
+| RAM缓冲区 | 4KB | 固定分配（DLM区域） |
+| 全局变量 | ~200B | 管理结构、状态变量 |
+| 栈开销 | ~100B | 函数调用栈 |
+| **总计** | **~4.3KB** | |
 
-**结论**: 批量读取 + PC端解析是最佳方案。
+### 11.2 时间开销
+
+| 操作 | 时间 | 说明 |
+|------|------|------|
+| RAM写入 | ~5μs | 内存拷贝 |
+| 阈值检查 | ~1μs | 简单比较 |
+| 外存写入（EEPROM） | ~5ms | 硬件限制 |
+| 外存写入（Flash） | ~20ms | 包含擦除时间 |
+| LOG解析 | ~50μs/条 | 查表+格式化 |
+
+### 11.3 外存寿命
+
+- **EEPROM**：100万次写入，按每天刷新100次，可用27年
+- **Flash**：10万次擦除，按每天擦除10次，可用27年
 
 ---
 
-## 10. 实施计划
+## 12. 测试计划
 
-### 10.1 开发阶段划分
+### 12.1 单元测试
+
+1. **RAM缓冲区测试**
+   - Ring Buffer基本读写
+   - 翻转场景
+   - 阈值触发
+
+2. **外存接口测试**
+   - EEPROM读写
+   - Flash擦除+写入
+   - 分区表解析
+
+3. **LOG表头测试**
+   - 序列号递增
+   - 校验和计算
+   - 损坏检测
+
+### 12.2 集成测试
+
+1. **端到端流程**
+   - LOG写入→RAM→外存→读取→解析
+
+2. **压力测试**
+   - 连续写入10000条LOG
+   - 验证数据完整性
+
+3. **异常测试**
+   - 外存不可用
+   - 分区表损坏
+   - 断电恢复
+
+### 12.3 仿真验证
+
+1. **仿真环境搭建**
+   - 配置文件加载
+   - 文件系统初始化
+
+2. **功能验证**
+   - 所有命令执行
+   - 数据持久化
+
+3. **兼容性验证**
+   - 与Phase1的兼容性
+   - 不同配置下的行为
+
+---
+
+## 13. 实施计划
+
+### 13.1 开发阶段
 
 ```
-Phase2.1: RAM缓冲区基础 (Week 1-2)
-├─ 数据结构定义
-├─ 环形缓冲区实现
-├─ 基础读写函数
-└─ 单元测试
+Week 1: 基础框架
+├─ Day 1-2: RAM缓冲区实现
+├─ Day 3-4: 外存抽象层
+└─ Day 5: 单元测试
 
-Phase2.2: 热重启功能 (Week 3)
-├─ 链接脚本配置
-├─ 魔数校验逻辑
-├─ 初始化函数
-└─ 测试验证
+Week 2: 核心功能
+├─ Day 1-2: LOG表头管理
+├─ Day 3-4: 刷新机制
+└─ Day 5: 集成测试
 
-Phase2.3: 多输出目标 (Week 4)
-├─ 配置系统设计
-├─ UART输出实现
-├─ RAM输出集成
-└─ 功能测试
+Week 3: 命令接口
+├─ Day 1-2: 6个命令实现
+├─ Day 3-4: 解析功能
+└─ Day 5: 功能测试
 
-Phase2.4: API和命令行 (Week 5)
-├─ 统计API实现
-├─ 批量读取API
-├─ UART命令行接口
-└─ 集成测试
+Week 4: 仿真系统
+├─ Day 1-2: 仿真接口实现
+├─ Day 3-4: 配置文件支持
+└─ Day 5: 完整验证
 
-Phase2.5: 优化和文档 (Week 6)
-├─ 性能优化
-├─ 代码审查
-├─ 文档完善
-└─ 最终验收
+Week 5: 优化完善
+├─ Day 1-2: 性能优化
+├─ Day 3-4: 文档完善
+└─ Day 5: 代码审查
 ```
 
-### 10.2 里程碑
+### 13.2 里程碑
 
 | 里程碑 | 时间 | 验收标准 |
 |--------|------|----------|
-| M1: 环形缓冲区完成 | Week 2 | 读写正常,翻转正确 |
-| M2: 热重启功能完成 | Week 3 | 重启后日志保留 |
-| M3: 多输出完成 | Week 4 | UART+RAM同时工作 |
-| M4: API完成 | Week 5 | 命令行可用 |
-| M5: Phase2完成 | Week 6 | 所有测试通过 |
-
----
-
-## 11. 测试策略
-
-### 11.1 单元测试
-
-```c
-/**
- * 测试用例1: 环形缓冲区基本功能
- */
-void test_ring_buffer_basic(void)
-{
-    // 1. 初始化测试
-    ww_log_ram_init(1);
-    assert(ww_log_ram_get_count() == 0);
-
-    // 2. 写入测试
-    U32 params[] = {0x12345678};
-    ww_log_output_ram(0x00C80F01, params, 1, WW_LOG_LEVEL_ERR);
-    assert(ww_log_ram_get_count() == 1);
-
-    // 3. 读取测试
-    WW_LOG_ENTRY_T entry;
-    assert(ww_log_ram_read_entry(&entry) == 0);
-    assert(entry.encoded_header == 0x00C80F01);
-    assert(entry.params[0] == 0x12345678);
-
-    printf("✓ Ring buffer basic test passed\n");
-}
-
-/**
- * 测试用例2: 缓冲区翻转
- */
-void test_ring_buffer_wrap(void)
-{
-    ww_log_ram_init(1);
-
-    // 写满缓冲区
-    for (int i = 0; i < WW_LOG_RAM_BUFFER_SIZE; i++) {
-        U32 params[] = {i};
-        ww_log_output_ram(i, params, 1, WW_LOG_LEVEL_INF);
-    }
-
-    // 继续写入,应该覆盖最老的
-    U32 params[] = {0xFFFFFFFF};
-    ww_log_output_ram(0xFFFF, params, 1, WW_LOG_LEVEL_INF);
-
-    // 验证
-    assert(ww_log_ram_get_count() == WW_LOG_RAM_BUFFER_SIZE - 1);
-
-    printf("✓ Ring buffer wrap test passed\n");
-}
-
-/**
- * 测试用例3: ERROR保护
- */
-void test_error_protection(void)
-{
-    ww_log_ram_init(1);
-
-    // 写入ERROR日志
-    U32 params[] = {0xDEADBEEF};
-    ww_log_output_ram(0x00C80F00, params, 1, WW_LOG_LEVEL_ERR);
-
-    // 写满缓冲区(非ERROR)
-    for (int i = 0; i < WW_LOG_RAM_BUFFER_SIZE; i++) {
-        U32 p[] = {i};
-        ww_log_output_ram(i, p, 1, WW_LOG_LEVEL_INF);
-    }
-
-    // ERROR日志应该被保护,不被覆盖
-    // (需要读取验证)
-
-    printf("✓ ERROR protection test passed\n");
-}
-```
-
-### 11.2 集成测试
-
-```c
-/**
- * 测试用例4: 热重启测试
- */
-void test_warm_restart(void)
-{
-    // 第一次启动
-    ww_log_ram_init(1);
-
-    // 写入一些日志
-    for (int i = 0; i < 10; i++) {
-        U32 params[] = {i};
-        ww_log_output_ram(i, params, 1, WW_LOG_LEVEL_INF);
-    }
-
-    U16 count_before = ww_log_ram_get_count();
-
-    // 模拟热重启(不清空内存)
-    int warm = ww_log_ram_init(0);
-
-    assert(warm == 1);  // 应该检测到热重启
-    assert(ww_log_ram_get_count() == count_before);  // 日志应该保留
-
-    printf("✓ Warm restart test passed\n");
-}
-
-/**
- * 测试用例5: 多输出目标测试
- */
-void test_multi_output(void)
-{
-    // 启用UART和RAM输出
-    // 写入日志
-    LOG_INF(0, "test", 123, 456);
-
-    // 验证UART有输出
-    // 验证RAM有记录
-
-    printf("✓ Multi-output test passed\n");
-}
-```
-
-### 11.3 压力测试
-
-```c
-/**
- * 测试用例6: 高频写入测试
- */
-void test_high_frequency_write(void)
-{
-    ww_log_ram_init(1);
-
-    U32 start_tick = get_tick();
-
-    // 快速写入1000条日志
-    for (int i = 0; i < 1000; i++) {
-        U32 params[] = {i};
-        ww_log_output_ram(i, params, 1, WW_LOG_LEVEL_DBG);
-    }
-
-    U32 end_tick = get_tick();
-    U32 duration = end_tick - start_tick;
-
-    printf("1000 logs written in %u ms\n", duration);
-    printf("Average: %u us per log\n", (duration * 1000) / 1000);
-
-    printf("✓ High frequency write test passed\n");
-}
-```
-
----
-
-## 12. 总结
-
-### 12.1 Phase2核心成果
-
-1. **RAM缓冲区管理系统**
-   - 环形缓冲区,自动翻转
-   - ERROR日志优先保护
-   - 统计信息完善
-
-2. **热重启保留功能**
-   - 魔数校验机制
-   - 数据一致性检查
-   - 冷/热启动自动识别
-
-3. **多输出目标支持**
-   - UART实时输出
-   - RAM缓冲存储
-   - 可配置启用/禁用
-
-4. **完善的API接口**
-   - 统计信息查询
-   - 批量读取导出
-   - UART命令行控制
-
-### 12.2 关键设计决策
-
-1. **日志读取方式**: 批量读取二进制数据 + PC端解析工具
-   - ✅ 简化嵌入式端逻辑
-   - ✅ 提高传输效率
-   - ✅ 灵活的分析能力
-
-2. **ERROR保护策略**: 未读ERROR不可覆盖(有阈值)
-   - ✅ 保护重要日志
-   - ✅ 防止缓冲区死锁
-   - ✅ 可配置策略
-
-3. **热重启机制**: .noinit段 + 魔数校验
-   - ✅ 可靠的数据保留
-   - ✅ 自动识别启动类型
-   - ✅ 数据完整性保护
-
-### 12.3 后续工作
-
-1. **Phase3规划**
-   - Flash存储支持
-   - 磨损均衡算法
-   - 更多输出目标
-
-2. **工具开发**
-   - PC端解析工具
-   - 日志可视化
-   - 统计分析功能
-
-3. **性能优化**
-   - 无锁队列(可选)
-   - 更快的临界区
-   - 内存优化
-
----
-
-## 附录A: 配置示例
-
-### A.1 开发环境配置
-
-```c
-/* ww_log_config.h - 开发配置 */
-
-#define WW_LOG_OUTPUT_UART_EN       1
-#define WW_LOG_OUTPUT_RAM_EN        1
-#define WW_LOG_RAM_BUFFER_SIZE      128
-#define WW_LOG_RAM_PERSISTENT       1
-#define WW_LOG_ERROR_PROTECT_EN     1
-#define WW_LOG_ERROR_MAX_UNREAD     32
-```
-
-### A.2 生产环境配置
-
-```c
-/* ww_log_config.h - 生产配置 */
-
-#define WW_LOG_OUTPUT_UART_EN       0    // 禁用UART
-#define WW_LOG_OUTPUT_RAM_EN        1
-#define WW_LOG_RAM_BUFFER_SIZE      64   // 减小缓冲区
-#define WW_LOG_RAM_PERSISTENT       1
-#define WW_LOG_ERROR_PROTECT_EN     1
-#define WW_LOG_ERROR_MAX_UNREAD     16
-```
-
----
-
-## 附录B: API快速参考
-
-| API函数 | 功能 | 返回值 |
-|---------|------|--------|
-| [`ww_log_ram_init(force_clear)`](src/core/ww_log_ram.c:223) | 初始化RAM缓冲区 | 0=冷启动, 1=热重启 |
-| [`ww_log_ram_get_count()`](src/core/ww_log_ram.c:260) | 获取当前日志数量 | 日志条数 |
-| [`ww_log_ram_get_info(info)`](src/core/ww_log_ram.c:563) | 获取统计信息 | void |
-| [`ww_log_ram_read_entry(entry)`](src/core/ww_log_ram.c:475) | 读取一条日志 | 0=成功, -1=空 |
-| [`ww_log_ram_read_batch(buffer, max)`](src/core/ww_log_ram.c:522) | 批量读取 | 实际读取数 |
-| [`ww_log_ram_export(buffer, max)`](src/core/ww_log_ram.c:592) | 导出(不删除) | 实际导出数 |
-| [`ww_log_ram_clear()`](src/core/ww_log_ram.c:626) | 清空缓冲区 | void |
-| [`ww_log_cmd_handler(cmd)`](src/core/ww_log_cmd.c:664) | 命令行处理 | void |
-
----
-
-**文档结束**
-
-本设计方案为Phase2提供了完整的技术路线和实施指导。所有设计决策都经过仔细考虑,确保系统的可靠性、高效性和易用性。
-
-
-设计方案核心内容
-1. RAM缓冲区设计
-环形缓冲区结构,支持自动翻转
-每条日志最多支持16个U32参数
-默认128条日志,约9KB内存占用
-完善的统计信息(写入/读取/溢出计数)
-2. 热重启保留机制
-使用.noinit段放置缓冲区
-魔数校验(头尾双重保护)
-自动识别冷启动/热重启
-数据一致性检查
-3. 多输出目标支持
-UART实时输出(可配置)
-RAM缓冲存储(可配置)
-支持同时启用多个输出
-为Phase3的Flash输出预留接口
-4. ERROR日志保护策略
-未读ERROR日志不可覆盖
-可配置保护阈值(默认32条)
-超过阈值时允许覆盖最老的
-统计保护次数
-5. 日志读取方式
-你提出的"一份一份往外读,然后用解析工具解析"的思路是完全正确的!
-
-优势:
-
-✅ 简化嵌入式端逻辑,减少代码空间
-✅ 二进制传输更高效
-✅ PC端工具可以做复杂分析和过滤
-✅ 支持离线分析和批量处理
-提供的API:
-
-单条读取: ww_log_ram_read_entry()
-批量读取: ww_log_ram_read_batch()
-导出(不删除): ww_log_ram_export()
-6. UART命令行接口
-支持的命令:
-
-log info - 显示统计信息
-log read <n> - 读取n条日志
-log export - 导出所有日志
-log clear - 清空缓冲区
-log dump - 二进制格式dump
-7. 临界区保护
-RTOS环境: 使用互斥锁
-裸机环境: 使用关中断
-最小化临界区时间
-提供ISR专用版本
-8. 完整的测试策略
-单元测试(环形缓冲区、翻转、ERROR保护)
-集成测试(热重启、多输出)
-压力测试(高频写入)
-实施建议
-6周开发计划:
-
-Week 1-2: RAM缓冲区基础
-Week 3: 热重启功能
-Week 4: 多输出目标
-Week 5: API和命令行
-Week 6: 优化和文档
-关键设计决策
-环形缓冲区 + 自动翻转: 确保日志不会停止,最新日志总能写入
-ERROR保护机制: 平衡重要日志保护和缓冲区可用性
-批量读取 + PC解析: 最优的日志读取方案
-热重启保留: 通过链接脚本和魔数校验实现可靠保留
-与设计文档的对比
-设计文档(doc/日志模块重构设计方案.md)中的方案非常完善,我的Phase2设计完全遵循了其核心思想,并针对你的具体需求进行了优化:
-
-✅ 采用了文档中的环形缓冲区设计
-✅ 实现了ERROR日志保护策略
-✅ 使用了.noinit段实现热重启
-✅ 提供了完整的API接口
-✅ 优化了日志读取方式(批量读取而非单行读取)
-现在你可以基于这个设计方案进入实施阶段。如果需要,我可以帮你切换到Code模式开始实现这些功能。
+| M1: RAM缓冲区完成 | Week 1 | Ring Buffer正常工作，

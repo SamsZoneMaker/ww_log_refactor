@@ -184,16 +184,6 @@ void ww_log_encode_output(U8 module_id, U16 log_id, U16 line, U8 level,
     /* Encode the log entry */
     encoded_log = WW_LOG_ENCODE(log_id, line, param_count, level);
 
-#ifdef WW_LOG_ENCODE_RAM_BUFFER_EN
-    /* Write header to RAM buffer */
-    ww_log_ram_write(encoded_log);
-
-    /* Write all parameters to RAM buffer */
-    for (i = 0; i < param_count; i++) {
-        ww_log_ram_write(params[i]);
-    }
-#endif
-
     /* Output to UART as hex for debugging/decoding */
     /* Format: 0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ... */
     printf("0x%08X", encoded_log);

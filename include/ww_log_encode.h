@@ -10,7 +10,7 @@
  * - Module ID automatically determined from CURRENT_MODULE_ID
  *
  * Encoding Layout (32 bits):
- * ┌─────────────┬─────────────┬──────────────┬────┐
+ * ┌─────────────┬─────────────┬──────────────┬────----┐
  * │ LOG_ID      │ LINE        │ DATA_LEN     │ LEVEL  │
  * │ (12 bits)   │ (12 bits)   │ (6 bits)     │(2 bits)│
  * │ 31       20 │ 19        8 │ 7          2 │ 1    0 │
@@ -53,10 +53,10 @@
 /**
  * Decode macros to extract fields from encoded log
  */
-#define WW_LOG_DECODE_LOG_ID(encoded)      (((encoded) >> 20) & 0xFFF)
-#define WW_LOG_DECODE_LINE(encoded)        (((encoded) >> 8) & 0xFFF)
-#define WW_LOG_DECODE_DATA_LEN(encoded)    (((encoded) >> 2) & 0x3F)
-#define WW_LOG_DECODE_LEVEL(encoded)       ((encoded) & 0x3)
+// #define WW_LOG_DECODE_LOG_ID(encoded)      (((encoded) >> 20) & 0xFFF)
+// #define WW_LOG_DECODE_LINE(encoded)        (((encoded) >> 8) & 0xFFF)
+// #define WW_LOG_DECODE_DATA_LEN(encoded)    (((encoded) >> 2) & 0x3F)
+// #define WW_LOG_DECODE_LEVEL(encoded)       ((encoded) & 0x3)
 
 /* ========== Output Function Declaration ========== */
 

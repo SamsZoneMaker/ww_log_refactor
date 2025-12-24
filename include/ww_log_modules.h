@@ -58,10 +58,9 @@ extern U32 g_ww_log_module_mask;
  * @brief Check if a module is enabled (runtime check)
  * @param module_id Module ID (0-31)
  * @return Non-zero if enabled, 0 if disabled
- */
-#define WW_LOG_MODULE_ENABLED(module_id) \
-    ((g_ww_log_module_mask & (1U << (module_id))) != 0)
-
+ * #define WW_LOG_MODULE_ENABLED(module_id) \
+ *    ((g_ww_log_module_mask & (1U << (module_id))) != 0)
+*/
 /* ========== API Functions ========== */
 
 /**
