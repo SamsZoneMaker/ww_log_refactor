@@ -73,6 +73,10 @@
  * - Module enable check (via g_ww_log_module_mask)
  * - Level threshold check (via g_ww_log_level_threshold)
  *
+ * Output behavior controlled by WW_LOG_ENCODE_OUTPUT_TO_RAM in ww_log_config.h:
+ * - 0: Output to UART in hex format (for debugging/decoding)
+ * - 1: Output to RAM buffer (for production, requires log_ram module)
+ *
  * Parameters are extracted via va_list inside the function,
  * eliminating the need to create arrays at each call site.
  */
@@ -195,31 +199,6 @@ void ww_log_encode_output(U8 module_id, U16 log_id, U16 line, U8 level,
         _WW_LOG_STATIC_EXPAND(WW_LOG_LEVEL_DBG, fmt, ##__VA_ARGS__)
 #else
     #define LOG_DBG(fmt, ...)  /* Compiled out by level threshold */
-#endif
+    #endif
 
-/* ========== RAM Buffer (Optional) ========== */
-
-#ifdef WW_LOG_ENCODE_RAM_BUFFER_EN
-
-#ifndef WW_LOG_RAM_BUFFER_SIZE
-#define WW_LOG_RAM_BUFFER_SIZE  128
-#endif
-
-typedef struct {
-    U32 magic;
-    U16 head;
-    U16 tail;
-    U32 entries[WW_LOG_RAM_BUFFER_SIZE];
-} WW_LOG_RAM_BUFFER_T;
-
-#define WW_LOG_RAM_MAGIC  0x574C4F47
-
-extern WW_LOG_RAM_BUFFER_T g_ww_log_ram_buffer;
-
-U16 ww_log_ram_get_count(void);
-void ww_log_ram_dump(void);
-void ww_log_ram_clear(void);
-
-#endif /* WW_LOG_ENCODE_RAM_BUFFER_EN */
-
-#endif /* WW_LOG_ENCODE_H */
+    #endif /* WW_LOG_ENCODE_H */

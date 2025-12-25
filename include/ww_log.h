@@ -61,8 +61,8 @@
  */
 
 /* Uncomment ONE of the following modes: */
-#define WW_LOG_MODE_STR
-// #define WW_LOG_MODE_ENCODE
+// #define WW_LOG_MODE_STR
+#define WW_LOG_MODE_ENCODE
 // #define WW_LOG_MODE_DISABLED
 
 /* Include corresponding implementation */

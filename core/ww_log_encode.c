@@ -10,125 +10,10 @@
 
 #ifdef WW_LOG_MODE_ENCODE
 
-/* ========== RAM Buffer (Optional) ========== */
-
-#ifdef WW_LOG_ENCODE_RAM_BUFFER_EN
-
-/**
- * Global RAM buffer instance
- */
-WW_LOG_RAM_BUFFER_T g_ww_log_ram_buffer = {
-    .magic = WW_LOG_RAM_MAGIC,
-    .head = 0,
-    .tail = 0,
-    .entries = {0}
-};
-
-/**
- * @brief Check if RAM buffer is full
- * @return 1 if full, 0 if not full
- */
-static U8 ww_log_ram_is_full(void)
-{
-    U16 next_tail = (g_ww_log_ram_buffer.tail + 1) % WW_LOG_RAM_BUFFER_SIZE;
-    return (next_tail == g_ww_log_ram_buffer.head);
-}
-
-/**
- * @brief Write one U32 entry to RAM buffer
- * @param data Data to write
- * @return 0 on success, -1 if buffer full
- */
-static S8 ww_log_ram_write(U32 data)
-{
-    if (ww_log_ram_is_full()) {
-        /* Buffer full - drop new entry */
-        return -1;
-    }
-
-    /* Write data */
-    g_ww_log_ram_buffer.entries[g_ww_log_ram_buffer.tail] = data;
-
-    /* Advance tail pointer */
-    g_ww_log_ram_buffer.tail = (g_ww_log_ram_buffer.tail + 1) % WW_LOG_RAM_BUFFER_SIZE;
-
-    return 0;
-}
-
-/**
- * @brief Get number of entries in RAM buffer
- * @return Number of entries
- */
-U16 ww_log_ram_get_count(void)
-{
-    if (g_ww_log_ram_buffer.tail >= g_ww_log_ram_buffer.head) {
-        return g_ww_log_ram_buffer.tail - g_ww_log_ram_buffer.head;
-    } else {
-        return WW_LOG_RAM_BUFFER_SIZE - g_ww_log_ram_buffer.head + g_ww_log_ram_buffer.tail;
-    }
-}
-
-/**
- * @brief Dump all entries in RAM buffer to stdout
- */
-void ww_log_ram_dump(void)
-{
-    printf("\n===== LOG RAM BUFFER DUMP =====\n");
-    printf("Magic: 0x%08X %s\n",
-           g_ww_log_ram_buffer.magic,
-           (g_ww_log_ram_buffer.magic == WW_LOG_RAM_MAGIC) ? "(VALID)" : "(INVALID)");
-    printf("Head: %u, Tail: %u, Count: %u\n",
-           g_ww_log_ram_buffer.head,
-           g_ww_log_ram_buffer.tail,
-           ww_log_ram_get_count());
-    printf("-------------------------------\n");
-
-    U16 idx = g_ww_log_ram_buffer.head;
-    U16 count = 0;
-
-    while (idx != g_ww_log_ram_buffer.tail) {
-        U32 entry = g_ww_log_ram_buffer.entries[idx];
-
-        /* Decode and print */
-        U16 log_id = WW_LOG_DECODE_LOG_ID(entry);
-        U16 line = WW_LOG_DECODE_LINE(entry);
-        U8 data_len = WW_LOG_DECODE_DATA_LEN(entry);
-        U8 level = WW_LOG_DECODE_LEVEL(entry);
-
-        printf("[%04u] 0x%08X -> LogID:%3u Line:%4u DataLen:%u Level:%u",
-               count++,
-               entry,
-               log_id,
-               line,
-               data_len,
-               level);
-
-        idx = (idx + 1) % WW_LOG_RAM_BUFFER_SIZE;
-
-        /* Print parameters if any */
-        if (data_len > 0) {
-            printf(" Params:");
-            for (U8 i = 0; i < data_len && idx != g_ww_log_ram_buffer.tail; i++) {
-                printf(" 0x%08X", g_ww_log_ram_buffer.entries[idx]);
-                idx = (idx + 1) % WW_LOG_RAM_BUFFER_SIZE;
-            }
-        }
-        printf("\n");
-    }
-
-    printf("===============================\n\n");
-}
-
-/**
- * @brief Clear RAM buffer
- */
-void ww_log_ram_clear(void)
-{
-    g_ww_log_ram_buffer.head = 0;
-    g_ww_log_ram_buffer.tail = 0;
-}
-
-#endif /* WW_LOG_ENCODE_RAM_BUFFER_EN */
+/* Include RAM buffer header if RAM output is enabled */
+#if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
+#include "ww_log_ram.h"
+#endif
 
 /* ========== Core Encoding Function ========== */
 
@@ -146,8 +31,9 @@ void ww_log_ram_clear(void)
  * 1. Module enable check (via g_ww_log_module_mask)
  * 2. Level threshold check (via g_ww_log_level_threshold)
  *
- * Parameters are extracted via va_list and stored in a local array,
- * then used for both RAM buffer and UART output.
+ * Output behavior controlled by WW_LOG_ENCODE_OUTPUT_TO_RAM:
+ * - 0: Output to UART (hex format for debugging/decoding)
+ * - 1: Output to RAM buffer (requires log_ram module)
  */
 void ww_log_encode_output(U8 module_id, U16 log_id, U16 line, U8 level,
                 U8 param_count, ...)
@@ -184,6 +70,10 @@ void ww_log_encode_output(U8 module_id, U16 log_id, U16 line, U8 level,
     /* Encode the log entry */
     encoded_log = WW_LOG_ENCODE(log_id, line, param_count, level);
 
+#if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
+    /* Output to RAM buffer */
+    log_ram_write(encoded_log, params, param_count);
+#else
     /* Output to UART as hex for debugging/decoding */
     /* Format: 0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ... */
     printf("0x%08X", encoded_log);
@@ -195,6 +85,7 @@ void ww_log_encode_output(U8 module_id, U16 log_id, U16 line, U8 level,
 
     printf("\n");
     fflush(stdout);
+#endif
 }
 
 #endif /* WW_LOG_MODE_ENCODE */
