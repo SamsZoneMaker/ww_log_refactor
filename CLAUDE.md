@@ -1,556 +1,268 @@
-# CLAUDE.md - AI Assistant Guide for ww_log_refactor
+# CLAUDE.md — ww_log v1 实现规格书
 
-> **Last Updated:** 2025-11-18
-> **Repository:** ww_log_refactor
-> **Purpose:** Logging System Refactor Design Documentation
-
----
-
-## Table of Contents
-
-1. [Project Overview](#project-overview)
-2. [Repository Structure](#repository-structure)
-3. [Key Concepts](#key-concepts)
-4. [Development Workflows](#development-workflows)
-5. [Conventions and Standards](#conventions-and-standards)
-6. [Common Tasks](#common-tasks)
-7. [Important Notes for AI Assistants](#important-notes-for-ai-assistants)
+> 本文件是 **ww_log_v1** 的实现规格。`/clear` 之后的 Claude 直接照此编写代码。
+> v0（旧实现）已整体移入 `ww_log_v0/`，**只读参考，不要修改**。
+> 新代码全部写在 `ww_log_v1/`。
 
 ---
 
-## Project Overview
+## 0. 项目背景（一句话）
 
-### Purpose
-
-This repository contains **design documentation** for refactoring the logging system in "Project-D" (an embedded systems project). The primary goals are:
-
-1. **Reduce code size by 60-80%** by replacing string-based logging with encoded logging
-2. **Reduce RAM usage by 50%+** through compact log encoding and efficient buffering
-3. **Maintain complete log traceability** with file ID and line number encoding
-4. **Support flexible logging modes** (string mode vs encode mode) via compile-time configuration
-
-### Current Status
-
-This is a **documentation-only repository** at this stage. It contains:
-- Design requirements (Chinese)
-- Detailed design specifications (Chinese)
-- Architecture diagrams (Mermaid)
-- Data structure definitions
-- API specifications
-
-**No implementation code exists yet** - this is purely design phase documentation.
-
-### Target Audience
-
-- Embedded systems developers working on Project-D
-- Firmware engineers implementing the logging system
-- AI assistants helping with design reviews or implementation planning
+嵌入式日志系统重构。痛点：原 string 模式在固件体积受限时太占空间。需要一个 **encode 模式**（把每条 log 压成定长二进制）大幅省 ROM/RAM，同时保留 string 模式（调试用）和全关模式。encode 出的数据可存进 RAM（4KB，掉电不丢的维护区）并 flush 到外存，PC 端用映射文件 decode 回可读日志。
 
 ---
 
-## Repository Structure
+## 1. 三种模式（编译期切换）
 
-```
-ww_log_refactor/
-├── README.md                           # Brief project description (English)
-├── CLAUDE.md                          # This file - AI assistant guide
-└── doc/                               # Design documentation (Chinese)
-    ├── log模块更新设计要求.md          # Requirements specification
-    └── 日志模块重构设计方案.md         # Detailed design document
-```
-
-### Key Files
-
-| File | Purpose | Language | Lines |
-|------|---------|----------|-------|
-| `README.md` | Brief project overview | English | ~3 |
-| `doc/log模块更新设计要求.md` | Design requirements and constraints | Chinese | ~112 |
-| `doc/日志模块重构设计方案.md` | Comprehensive design specification with architecture, data structures, APIs, examples | Chinese | ~2812 |
-
----
-
-## Key Concepts
-
-### 1. Two Logging Modes
-
-The system supports two mutually exclusive modes (selected at compile time):
-
-#### **str_mode (String Mode)**
-- Traditional printf-style logging with format strings
-- Example: `TEST_LOG_INFO_MSG("Temperature: %d°C", temp);`
-- **Pros:** Human-readable, familiar interface
-- **Cons:** Large code size (format strings), high RAM usage (stack space for formatting)
-
-#### **encode_mode (Encoded Mode)**
-- Compact binary encoding: 32-bit integer contains file ID + line number + log level
-- Example: Same `TEST_LOG_INFO_MSG()` interface, but internally encodes to 0xABC12304
-- **Pros:** Minimal code size, low RAM usage, persistent storage friendly
-- **Cons:** Requires decoder tool to read logs, slightly more complex setup
-
-### 2. Unified Interface
-
-**Critical:** Both modes use **identical macros** in application code:
-- `TEST_LOG_ERR_MSG(fmt, ...)`
-- `TEST_LOG_WRN_MSG(fmt, ...)`
-- `TEST_LOG_INF_MSG(fmt, ...)`
-- `TEST_LOG_DBG_MSG(fmt, ...)`
-
-The implementation switches based on compile-time configuration.
-
-### 3. File ID Management
-
-Each source file gets a unique 12-bit ID (0-4095):
-- Defined in `log_file_id.h` enum (e.g., `FILE_ID_SENSOR_TEMPERATURE = 151`)
-- Each .c file defines `#define CURRENT_FILE_ID FILE_ID_SENSOR_TEMPERATURE`
-- IDs are organized by functional module (1-50 for init, 51-150 for drivers, etc.)
-
-### 4. Log Encoding Scheme (encode_mode)
-
-32-bit encoding format:
-```
- 31                    20 19                8 7       4 3      0
-┌──────────────────────┬────────────────────┬─────────┬────────┐
-│   File ID (12 bits)  │  Line No (12 bits) │Reserved │ Level  │
-│      0-4095          │     0-4095         │ (4 bits)│(4 bits)│
-└──────────────────────┴────────────────────┴─────────┴────────┘
-```
-
-Example:
-- File ID: 151 (sensor_temperature.c)
-- Line: 234
-- Level: 3 (INFO)
-- Encoded: `0x0970EA03` = `(151 << 20) | (234 << 8) | 3`
-
-### 5. Log Levels
+在 `ww_log.h` 里三选一（沿用 v0 风格）：
 
 ```c
-typedef enum {
-    WW_LOG_LEVEL_OFF = 0,   // All logging disabled
-    WW_LOG_LEVEL_ERR = 1,   // Errors: system failures, data corruption
-    WW_LOG_LEVEL_WRN = 2,   // Warnings: potential issues, resource limits
-    WW_LOG_LEVEL_INF = 3,   // Info: key state changes, major events
-    WW_LOG_LEVEL_DBG = 4,   // Debug: detailed execution flow
-} WW_LOG_LEVEL_E;
+// #define WW_LOG_MODE_STR        // string 模式：printf 风格，直观，体积大（调试用）
+// #define WW_LOG_MODE_ENCODE     // encode 模式：定长二进制，省体积（生产用）
+#define WW_LOG_MODE_DISABLED      // 全关：所有 LOG 宏展开为空
 ```
 
-### 6. Output Targets
-
-Logs can be routed to multiple destinations (configured at compile time):
-- **UART:** Real-time output for debugging
-- **RAM buffer:** Circular buffer for persistence across warm resets
-- **External storage:** Optional flash/EEPROM for long-term storage
-
-### 7. RAM Buffer Structure
+统一 API，三种模式调用点写法完全一致：
 
 ```c
-typedef struct {
-    U16 logEntryHead;                        // Read pointer
-    U16 logEntryTail;                        // Write pointer
-    U32 logEntry[WW_LOG_RAM_ENTRY_NUM];     // Circular buffer (64-128 entries)
-    U16 logMedia;                            // External storage log count
-    // ...
-} WW_LOG_RAM_T;
+LOG_ERR("msg");                 LOG_WRN("x=%d", a);
+LOG_INF("x=%d y=%d", a, b);     LOG_DBG("...");
 ```
 
-- Empty: `logEntryHead == logEntryTail`
-- Full: `(logEntryTail + 1) % SIZE == logEntryHead`
-- Write: Increment `logEntryTail`, handle wraparound
-- Read: Increment `logEntryHead`, handle wraparound
+- `WW_LOG_MODE_DISABLED`：四个宏 `do{}while(0)`。
+- 三种模式都必须支持 **level 开关** 和 **模块开关**（见 §4）。
 
 ---
 
-## Development Workflows
+## 2. encode 编码格式（核心，已锁定）
 
-### Current Phase: Design & Documentation
-
-Since this is a documentation repository, typical workflows involve:
-
-1. **Reviewing/Updating Requirements**
-   - File: `doc/log模块更新设计要求.md`
-   - Update design constraints, feature requirements, or use cases
-
-2. **Refining Design Specifications**
-   - File: `doc/日志模块重构设计方案.md`
-   - Update architecture diagrams, data structures, or API definitions
-
-3. **Adding Examples**
-   - Add code snippets demonstrating usage patterns
-   - Include both str_mode and encode_mode examples
-
-### Future Phase: Implementation
-
-When implementation begins, expected structure:
+每条 log 头部是一个 **U32**：
 
 ```
-ww_log_refactor/
-├── include/
-│   ├── ww_log.h              # Public API
-│   ├── ww_log_config.h       # Configuration options
-│   └── log_file_id.h         # File ID enumeration
-├── src/
-│   ├── ww_log_str.c          # String mode implementation
-│   ├── ww_log_encode.c       # Encode mode implementation
-│   ├── ww_log_ram.c          # RAM buffer management
-│   ├── ww_log_storage.c      # External storage (optional)
-│   └── ww_log_api.c          # RSDK interface
-├── tools/
-│   └── log_decoder.py        # Decode binary logs
-├── examples/
-│   └── basic_usage.c
-└── tests/
-    └── test_log_buffer.c
+ 31                20 19              6 5         0
+┌────────────────────┬──────────────────┬───────────┐
+│   file_id (12)     │    line (14)     │ param_cnt │
+│                    │                  │   (6)     │
+└────────────────────┴──────────────────┴───────────┘
+        │
+        └ file_id = [ module_id : 5 ][ offset : 7 ]
 ```
 
----
+| 字段 | 位宽 | 范围 | 含义 |
+|------|------|------|------|
+| file_id | 12 | 0–4095 | 高 5 位 = module_id(0–31)，低 7 位 = 模块内 offset(0–127) |
+| line | 14 | 0–16383 | `__LINE__` |
+| param_count | 6 | 0–63 | 后跟的 U32 参数个数（**让缓冲区自描述**） |
 
-## Conventions and Standards
+**level 不进编码。** 它在编码前就用于过滤（运行期 `level > threshold` 直接 return），decode 时再由 map 按 `(file_id, line)` 还原。
 
-### 1. Naming Conventions
-
-| Type | Convention | Example |
-|------|------------|---------|
-| File IDs | `FILE_ID_<MODULE>_<NAME>` | `FILE_ID_SENSOR_TEMPERATURE` |
-| Functions | `ww_log_<action>_<object>` | `ww_log_ram_write_entry()` |
-| Macros (API) | `TEST_LOG_<LEVEL>_MSG` | `TEST_LOG_ERR_MSG()` |
-| Config Macros | `CONFIG_WW_LOG_<FEATURE>` | `CONFIG_WW_LOG_ENCODE_MODE` |
-| Types | `<NAME>_T` or `<NAME>_E` | `WW_LOG_RAM_T`, `WW_LOG_LEVEL_E` |
-
-### 2. Module Organization
-
-File IDs are organized by functional area:
-- **1-50:** System initialization
-- **51-150:** Driver layer
-- **151-250:** Sensors
-- **251-350:** Algorithms
-- **351-450:** Communication
-- **451-550:** Application layer
-
-### 3. Configuration Management
-
-All compile-time options are in `ww_log_config.h`:
+U32 头之后紧跟 `param_count` 个 U32 参数。一条完整 entry = `4 + param_count*4` 字节。
 
 ```c
-// Mode selection (mutually exclusive)
-#define CONFIG_WW_LOG_ENCODE_MODE    // or CONFIG_WW_LOG_STR_MODE
+#define WW_LOG_ENCODE(file_id, line, pcnt) \
+    ( (((U32)(file_id) & 0xFFF) << 20) | \
+      (((U32)(line)    & 0x3FFF) << 6) | \
+      ( (U32)(pcnt)    & 0x3F) )
 
-// Output targets
-#define CONFIG_WW_LOG_OUTPUT_UART
-#define CONFIG_WW_LOG_OUTPUT_RAM
-// #define CONFIG_WW_LOG_OUTPUT_FLASH
-
-// Buffer size
-#define CONFIG_WW_LOG_RAM_ENTRY_NUM  64
-
-// Module-level static switches
-#define CONFIG_WW_LOG_MOD_INIT_EN
-#define CONFIG_WW_LOG_MOD_SENSOR_EN
-// #define CONFIG_WW_LOG_MOD_DEBUG_EN  // Disabled
+#define WW_LOG_MODULE_OF(file_id)  (((file_id) >> 7) & 0x1F)
+#define WW_LOG_OFFSET_OF(file_id)  ((file_id) & 0x7F)
 ```
 
-### 4. File ID Management Best Practices
+> 与 v0 的差异：v0 是 `[file_id12][line12][datalen6][level2]`，line 只到 4095 且含 level。v1 去掉 level、line 扩到 16383、file_id 内部改为 5+7 划分。
 
-1. **Never reuse IDs** - Mark as deprecated if file is removed
-2. **Pre-allocate ranges** - Leave gaps for future additions
-3. **Document in comments** - Include file path next to ID definition
-4. **Version control** - Track ID assignments in design docs
+### `%s` 处理（不禁止）
 
-Example:
+当前代码里 `%s` 主要用于打印 `__FILE__/__LINE__`，而 file/line 已在 U32 头里冗余存在。策略：
+- 运行期：encode 模式照常把 `%s` 对应的指针当 U32 存入缓冲（浪费 4 字节，但无害）。
+- decode 期：map 里的 fmt 含 `%s`，decoder 对该参数显示占位 `<%s@0xXXXXXXXX>`（内容不可还原）。
+- 构建期扫描器遇到 `%s` **只告警不报错**。
+
+---
+
+## 3. 无感的 ID 管理 + 统一 JSON
+
+### 输入：`log_config.json`（人工维护，只登记 模块→目录）
+
+```json
+{
+  "modules": {
+    "DEMO":    { "id": 1, "dirs": ["src/demo"],                 "enable": true },
+    "DRIVERS": { "id": 4, "dirs": ["src/drivers", "src/hal"],   "enable": true },
+    "TEST":    { "id": 2, "dirs": ["src/test"],                 "enable": false }
+  },
+  "unregistered": "warn"
+}
+```
+
+- module 由 **路径前缀匹配** 判定，**最长前缀优先**。
+- 一个模块可含多个目录、任意多文件。
+- 不在任何 `dirs` 下的 .c → 告警 + 该文件 log 关闭（不阻断编译）。
+- module_id 由人工在此分配，**稳定**（开关 key 在它上面）。范围 0–31。
+
+### 生成：`tools/gen_log_map.py` 扫描 → `ww_log_map.json`（生成且提交）
+
+脚本扫 `dirs` 下所有 `.c`，提取每个 `LOG_xxx(...)` 调用的 **行号 + level + fmt**，产出统一映射文件：
+
+```json
+{
+  "meta": { "version": "<来自项目宏，先留空/注释>", "build_time": "...", "encoding": "file12_line14_pcnt6" },
+  "modules": { "1": {"name":"DEMO","enable":true}, "4": {"name":"DRIVERS","enable":true} },
+  "files":   { "64": {"path":"src/demo/demo_init.c","module":"DEMO"}, "65": {"path":"src/demo/demo_process.c","module":"DEMO"} },
+  "entries": [
+    {"file_id":64,"line":18,"level":"INF","fmt":"Demo module initializing..."},
+    {"file_id":64,"line":26,"level":"INF","fmt":"Hardware check passed, code=%d"}
+  ]
+}
+```
+
+### file_id 锁定（关键，#2 决策）
+
+- file_id = `module_id*128 + offset`（module_id 来自 config，offset 模块内分配）。
+- **重新生成时先读旧 `ww_log_map.json`**：已分配过的文件保持原 offset 不变，新文件只在空位追加。删除的文件其 offset **保留占位、不回收**。
+- 目的：旧固件的历史日志仍能被新 map 正确 decode（增删文件不让已存在 id 漂移）。
+
+### 一文件两用（#3 决策）
+
+`ww_log_map.json` 同时驱动构建和 decode：
+- `gen_log_map.py --makefile` → 派生 `build/file_ids.mk`（供 Makefile `-D` 注入）。
+- `gen_log_map.py --header` → 派生 `include/auto_file_ids.h`（模块/文件 ID 宏）。
+- `tools/log_decoder.py --map ww_log_map.json` → 直接读它做还原。
+
+### 构建期校验（#10）
+
+扫描时统计 fmt 里非 `%%` 的占位符个数，与该调用实际传参个数比对，不一致 **告警**。
+
+---
+
+## 4. 开关设计（string / encode 都要）
+
+两层，互不依赖：
+
+### 静态开关（编译期，零代码）
+Makefile 按文件注入 `CURRENT_MODULE_STATIC_EN`（来自该文件所属模块的 `enable`）。为 0 时 LOG 宏展开为空，**该文件 log 零体积**。沿用 v0 的 `_WW_LOG_IF(cond)` 拼接技巧。
+
+另加编译期 level 阈值 `WW_LOG_COMPILE_THRESHOLD`：高于阈值的 `LOG_DBG/INF` 直接编译掉。
+
+### 动态开关（运行期）
+- `g_ww_log_module_mask`（U32，一位一个模块，0–31）→ `ww_log_set_module_mask / enable_module / disable_module`。
+- `g_ww_log_level_threshold` → `ww_log_set_level_threshold`。
+- 检查在输出函数内部完成（集中，减小调用点体积）：
+  ```c
+  if ((g_ww_log_module_mask & (1U << module_id)) == 0) return;
+  if (level > g_ww_log_level_threshold) return;
+  ```
+
+> 开关 key 在 **module_id**（config 分配，稳定），不在 offset 上。因此 file_id 锁定/漂移不影响开关。动态开关停在**模块**粒度，不做文件粒度（避免依赖会变的 offset）。
+
+### Makefile 注入（耦合点收敛）
+日志核心只认三个注入宏：`CURRENT_FILE_ID` / `CURRENT_MODULE_ID` / `CURRENT_MODULE_STATIC_EN`。沿用 v0 的 per-file 编译规则（`$(eval ...)` 从 `file_ids.mk` 查这三个值）。这样将来换构建系统只需换"注入这三个宏"的方式，核心不动。
+
+---
+
+## 5. 输出后端（可组合，#6）
+
+`ww_log_config.h` 里三个独立开关，可叠加：
+
 ```c
-/* Sensor Module (151-250) */
-FILE_ID_SENSOR_TEMPERATURE = 151,  // src/sensors/temperature.c
-FILE_ID_SENSOR_PRESSURE = 152,     // src/sensors/pressure.c
-// 153-160: Reserved for future sensors
+#define WW_LOG_BACKEND_UART     1
+#define WW_LOG_BACKEND_RAM      1
+#define WW_LOG_BACKEND_STORAGE  0
 ```
 
-### 5. Code Documentation
+- 输出函数编码出 U32 后，依次分发给所有开启的后端（轻量函数指针表或直接 `#if` 串联，不引入动态注册复杂度）。
+- **UART**：encode 模式输出 hex 帧（`0x%08X` 头 + 参数，沿用 v0 格式即可）；string 模式输出可读文本。
+- **RAM**：环形缓冲，沿用 v0 `ww_log_ram.*`（4KB = 64B header + 数据区，3KB flush 阈值，热重启恢复）。
+- **STORAGE**：flush 到外存，沿用 v0 `ww_log_storage.* / ww_log_header.* / ww_log_flush.*`。
 
-Use Doxygen-style comments for all public APIs:
+调用 `LOG_xxx()` 的代码对后端组合完全无感。
+
+---
+
+## 6. panic 模式（#7，v0 没有）
 
 ```c
-/**
- * @brief Write encoded log entry to buffer
- * @param level Log level (WW_LOG_LEVEL_E)
- * @param param1 Optional parameter (e.g., error code)
- * @param param2 Optional parameter (e.g., data value)
- * @return 0 on success, -1 if buffer full
- */
-int log_encode_write(U8 level, U32 param1, U32 param2);
+void ww_log_panic(void);
 ```
+
+在 HardFault / watchdog 回调里调用，语义：
+1. 绕过所有模块/level 过滤；
+2. 立即同步 flush RAM → 外存（不等阈值）；
+3. UART 切轮询输出（不依赖中断）；
+4. 置 panic flag，后续 LOG 直接同步直写。
+
+目的：没有 UART 时，靠 RAM/外存保住崩溃前最后几条日志。
 
 ---
 
-## Common Tasks
+## 7. 目录结构
 
-### Task 1: Adding a New Design Section
-
-**When to do:** Expanding the design specification
-
-**Steps:**
-1. Open `doc/日志模块重构设计方案.md`
-2. Follow the existing structure (numbered sections with clear hierarchy)
-3. Include:
-   - Design rationale
-   - Code examples (C snippets)
-   - Diagrams if applicable (use Mermaid)
-   - Edge cases and error handling
-
-**Example Addition:**
-```markdown
-## X. [New Feature Name]
-
-### X.1 Design Rationale
-
-[Explain why this feature is needed...]
-
-### X.2 Implementation Approach
-
-```c
-// Code example
+```
+ww_log/
+├── CLAUDE.md                  ← 本文件
+├── ww_log_v0/                 ← 旧实现，只读参考
+└── ww_log_v1/                 ← 在这里写新代码
+    ├── Makefile
+    ├── log_config.json        ← 人工：模块→目录
+    ├── ww_log_map.json        ← 生成（构建+decode 共用）
+    ├── include/
+    │   ├── type.h                  (从 v0 拷)
+    │   ├── ww_log.h                (模式分发 + 公共 API + level 宏)
+    │   ├── ww_log_config.h         (后端开关 / RAM 尺寸 / 阈值 / magic)
+    │   ├── ww_log_encode.h
+    │   ├── ww_log_str.h
+    │   ├── ww_log_modules.h        (动态 mask + level 阈值 API)
+    │   ├── ww_log_backend.h        (后端分发)
+    │   ├── ww_log_ram.h
+    │   ├── ww_log_storage.h
+    │   ├── ww_log_header.h
+    │   ├── ww_log_flush.h
+    │   ├── ww_log_panic.h
+    │   └── auto_file_ids.h         (生成)
+    ├── core/
+    │   ├── ww_log_common.c         (init / 全局变量定义)
+    │   ├── ww_log_encode.c
+    │   ├── ww_log_str.c
+    │   ├── ww_log_modules.c
+    │   ├── ww_log_backend.c
+    │   ├── ww_log_ram.c
+    │   ├── ww_log_storage.c
+    │   ├── ww_log_header.c
+    │   ├── ww_log_flush.c
+    │   └── ww_log_panic.c
+    ├── sim/                    ← PC 仿真外存（沿用 v0 sim_storage.*）
+    ├── tools/
+    │   ├── gen_log_map.py      (扫描 → ww_log_map.json / file_ids.mk / auto_file_ids.h)
+    │   └── log_decoder.py      (--map ww_log_map.json 还原)
+    ├── src/                    ← demo 模块，给 sim 跑通用（demo/ drivers/ test/）
+    └── examples/
+        └── main.c             ← 仿真主程序
 ```
 
-### X.3 Configuration
-
-```c
-#define CONFIG_NEW_FEATURE  1
-```
-```
-
-### Task 2: Updating Requirements
-
-**When to do:** Clarifying or adding new requirements
-
-**Steps:**
-1. Open `doc/log模块更新设计要求.md`
-2. Add to appropriate section:
-   - `## 总体目标` - High-level goals
-   - `## 当前情况` - Current state analysis
-   - `## 总体需求` - General requirements
-   - `## Encode_mode` - Encode mode specifics
-   - `## 使用场景` - Usage scenarios
-
-### Task 3: Reviewing Design for Completeness
-
-**Checklist:**
-- [ ] All requirements have corresponding design sections
-- [ ] Data structures are fully specified (with size constraints)
-- [ ] APIs have clear parameter descriptions
-- [ ] Error handling is documented
-- [ ] Thread safety / critical sections are addressed
-- [ ] Configuration options are documented
-- [ ] Memory usage is analyzed (code size, RAM, etc.)
-- [ ] Examples demonstrate common use cases
-
-### Task 4: Preparing for Implementation
-
-**Before coding begins:**
-1. Finalize file ID allocation (complete `log_file_id.h` design)
-2. Define all configuration macros
-3. Document state machines (if any)
-4. Create test plan document
-5. Design decoder tool interface
-6. Set up build configuration examples
+实现顺序建议：type.h → config/modules（开关）→ encode → backend(UART) → str → ram/storage/flush → panic → gen_log_map.py → decoder → examples/main.c。
 
 ---
 
-## Important Notes for AI Assistants
+## 8. sim 验收标准（必须达成）
 
-### Understanding the Context
+v1 用 **gcc 在 PC** 上编译运行（`SIMULATION_MODE`，外存用 `sim/` 静态数组模拟）。完成判据：
 
-1. **Language:** Primary documentation is in **Chinese** (Simplified). When discussing with users, clarify their preferred language.
-
-2. **Domain:** This is **embedded systems / firmware** development:
-   - Memory constraints are critical (every byte counts)
-   - Code size directly impacts ROM/Flash usage
-   - RAM is scarce (likely <64KB total)
-   - No dynamic memory allocation (malloc/free avoided)
-   - Performance: microsecond-level latency concerns
-
-3. **Target Platform:** Likely a microcontroller (ARM Cortex-M or similar):
-   - Limited stack space
-   - No OS or RTOS assumed (bare metal or lightweight RTOS)
-   - UART is primary debug interface
-   - May have watchdog timers (long operations are dangerous)
-
-### When Helping with Design
-
-1. **Memory Analysis:** Always consider:
-   - How many bytes per log entry?
-   - What's the ROM overhead (format strings, function calls)?
-   - What's the stack usage?
-
-2. **Trade-offs:** The core trade-off is:
-   - **str_mode:** Easy to read, large code size, high RAM
-   - **encode_mode:** Compact, needs decoder, minimal overhead
-
-3. **Critical Sections:** Multi-task logging requires:
-   - Atomic operations on circular buffer pointers
-   - Minimal time in critical sections
-   - Consider interrupt-driven logging
-
-4. **Maintainability:** File ID management is crucial:
-   - Avoid ID collisions
-   - Make ID assignment systematic
-   - Provide tools to validate ID uniqueness
-
-### When Reviewing Code (Future)
-
-1. **Check for Mode Leakage:**
-   - Ensure str_mode code doesn't affect encode_mode binary size
-   - Use `#ifdef` guards properly
-   - Verify linker doesn't pull in unused printf code
-
-2. **Validate Encoding:**
-   - File ID fits in 12 bits (max 4095)
-   - Line number fits in 12 bits (warn if file >4095 lines)
-   - Level is 0-15
-
-3. **Buffer Safety:**
-   - Check for off-by-one errors in circular buffer
-   - Verify wraparound logic
-   - Test full/empty conditions
-
-4. **Performance:**
-   - Log functions should be inline or very fast
-   - Minimize string operations
-   - Avoid variadic functions if possible (they're slow on some platforms)
-
-### Common Pitfalls
-
-1. **Macro Hygiene:**
-   ```c
-   // BAD: Missing do-while, can break if-else
-   #define LOG(x) foo(x); bar(x)
-
-   // GOOD: Safe in all contexts
-   #define LOG(x) do { foo(x); bar(x); } while(0)
-   ```
-
-2. **Parameter Extraction:**
-   - C doesn't have true reflection
-   - Variadic macros (`##__VA_ARGS__`) have limitations
-   - May need multiple macro variants for different param counts
-
-3. **Compile-Time vs Runtime:**
-   - **Static switch:** `#ifdef CONFIG_MODULE_EN` (code is removed)
-   - **Dynamic switch:** `if (g_log_enabled)` (code still in binary)
-
-4. **Endianness:**
-   - When storing to external flash, consider byte order
-   - Document whether encoded U32 is stored as big/little endian
-
-### Suggested Improvements (for Discussion)
-
-If asked for recommendations, consider:
-
-1. **Timestamping:** Use reserved 4 bits for compressed timestamp (e.g., ticks % 16)
-2. **Task ID:** In RTOS environment, log which task generated the log
-3. **Sequence Numbers:** Detect log loss in circular buffer
-4. **Conditional Compilation:** Per-file log level thresholds
-5. **Static Analysis:** Script to validate file IDs at build time
-6. **Decoder Tool:** Python script to convert binary logs to readable format
-7. **Log Viewer:** Real-time monitoring tool for UART output
-
-### Questions to Ask Users
-
-Before making significant suggestions:
-
-1. "What's the target microcontroller family?" (affects available features)
-2. "Is there an RTOS, or is this bare metal?"
-3. "What's the total RAM budget?" (to size buffers appropriately)
-4. "How are logs retrieved in production?" (UART only, or do devices upload to server?)
-5. "Are there real-time constraints?" (logging in ISRs?)
-
-### Working with Chinese Documentation
-
-The documentation uses technical Chinese. Key terms:
-
-| Chinese | English | Notes |
-|---------|---------|-------|
-| 日志 | Log | Generic logging term |
-| 编码模式 | Encode mode | Binary encoding mode |
-| 字符串模式 | String mode | Traditional printf mode |
-| 临界区 | Critical section | Thread safety |
-| 外存 | External storage | Flash/EEPROM |
-| 热重启 | Warm restart | Reset without power loss |
-| 文件编号 | File ID | Unique identifier per source file |
-| 行数 | Line number | Source line number |
-| 开关 | Switch | Enable/disable flag |
-| 静态开关 | Static switch | Compile-time flag |
-| 动态开关 | Dynamic switch | Runtime flag |
-
-### Git Workflow Notes
-
-**Current Branch:** `claude/claude-md-mi4db0xsm2nfl59u-015yMkSTg2L8cSdNHKKLN18M`
-
-**Important:**
-- All development should occur on this branch
-- Branch name must start with `claude/` and end with session ID
-- Use `git push -u origin <branch-name>` when pushing
-- Create descriptive commit messages (this is a design repository, so commits should explain design decisions)
-
-Example good commit message:
-```
-Add detailed encode_mode data structure specification
-
-- Defined WW_LOG_RAM_T structure with circular buffer pointers
-- Documented buffer full/empty conditions
-- Added wraparound handling requirements
-- Specified persistent storage across warm resets
-```
+1. `cd ww_log_v1 && make && make run` 通过。
+2. 三种模式都能切换并正确运行：
+   - DISABLED：无 log 输出。
+   - STR：输出 `[INF] demo_init.c:26 - Hardware check passed, code=0` 这类可读行。
+   - ENCODE：输出 U32 hex 帧。
+3. 动态开关生效：关某模块 / 调 level 阈值后，对应 log 不再输出。
+4. encode + RAM + STORAGE：写入、达阈值 flush、热重启恢复路径都能跑。
+5. **decode 闭环**：encode 模式的 hex 输出 → `log_decoder.py --map ww_log_map.json` → 还原出与 STR 模式一致的可读日志（含参数代入 fmt）。
+6. `gen_log_map.py` 重跑两次（中间增删一个 .c）验证 **file_id 锁定**：已有文件 id 不变。
 
 ---
 
-## Quick Reference
+## 9. 约定
 
-### Essential Design Documents
-
-1. **Requirements:** `doc/log模块更新设计要求.md` (~112 lines)
-   - Read this first to understand project goals and constraints
-
-2. **Design Spec:** `doc/日志模块重构设计方案.md` (~2812 lines)
-   - Comprehensive architecture, data structures, and examples
-   - Sections include: Background, Architecture, File IDs, Encoding, APIs, RAM buffer, External storage, Examples, Testing
-
-### Key Design Elements
-
-| Element | Description | Location in Design Doc |
-|---------|-------------|------------------------|
-| Architecture | Mermaid diagram showing module relationships | Section 2.1 |
-| File ID Enum | `log_file_id.h` design | Section 3 |
-| Encoding Format | 32-bit bitfield layout | Section 6.1 |
-| RAM Buffer | `WW_LOG_RAM_T` structure | Section on RAM management |
-| Config Options | All `CONFIG_WW_LOG_*` macros | Section 2.3 |
-| API Macros | `TEST_LOG_XXX_MSG()` definitions | Section 5 |
-
-### Document Navigation Tips
-
-The design document (`日志模块重构设计方案.md`) is very long. Key sections:
-
-- **Lines 1-55:** Background and objectives
-- **Lines 56-138:** Overall architecture
-- **Lines 139-240:** File ID management system
-- **Lines 241-301:** Log level definitions
-- **Lines 302-415:** Unified API design
-- **Lines 416-600:** encode_mode detailed design
-- **Lines 600+:** Implementation details, examples, testing strategies
-
----
-
-## Version History
-
-| Date | Version | Changes |
-|------|---------|---------|
-| 2025-11-18 | 1.0 | Initial CLAUDE.md creation - comprehensive guide covering current design documentation state |
-
----
-
-## Contact & Support
-
-For questions about this repository or the logging system design:
-- Review the design documents in `doc/` directory
-- Check commit history for design evolution
-- Refer to this CLAUDE.md for AI assistant guidance
-
----
-
-**End of CLAUDE.md**
+- 类型用 `type.h` 的 `U8/U16/U32`（从 v0 拷贝）。
+- 命名沿用 v0：函数 `ww_log_<action>_<object>`，类型 `XXX_T/XXX_E`，配置宏 `WW_LOG_<FEATURE>`。
+- 宏务必 `do{}while(0)` 包裹。
+- 注释用 Doxygen 风格。
+- 平台：RISC-V（Andes N25），裸机/轻 RTOS，无动态内存，RAM 紧张，UART 为主调试口。注意临界区（环形缓冲指针操作要原子）。
+- 参考 v0 对应文件即可快速实现 ram/storage/flush/header，逻辑基本可复用，主要改动在编码格式（§2）和后端组合（§5）。

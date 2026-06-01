@@ -8,6 +8,10 @@ bin/
 
 # Executables
 log_test
+*.exe
+
+# Simulation data
+sim_data/
 
 # Test outputs
 encode_output.txt

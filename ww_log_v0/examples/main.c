@@ -8,10 +8,16 @@
  * - Unified LOG_XXX() API for both str and encode modes
  * - Compile-time mode selection via Makefile
  * - No manual CURRENT_FILE_ID definition needed!
+ * - Phase2: RAM buffer and flush mechanism
  */
 
 #include "ww_log.h"
 #include <stdio.h>
+
+#if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
+#include "ww_log_flush.h"
+#include "ww_log_ram.h"
+#endif
 
 /* External function declarations from all modules */
 
@@ -78,8 +84,9 @@ int main(void)
     printf("  Mode: STRING MODE\n");
 #elif defined(WW_LOG_MODE_ENCODE)
     printf("  Mode: ENCODE MODE\n");
-#ifdef WW_LOG_ENCODE_RAM_BUFFER_EN
-    printf("  RAM Buffer: ENABLED (%d entries)\n", WW_LOG_RAM_BUFFER_SIZE);
+#if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
+    printf("  RAM Buffer: ENABLED (4KB)\n");
+    printf("  Flush Threshold: 3KB\n");
 #endif
 #else
     printf("  Mode: DEFAULT (STRING)\n");
@@ -90,6 +97,12 @@ int main(void)
 
     /* Initialize log system */
     ww_log_init();
+
+#if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
+    /* Initialize flush mechanism */
+    log_flush_init();
+    printf("LOG flush mechanism initialized\n");
+#endif
     print_separator();
 
     /* ===== DEMO Module Tests ===== */
@@ -189,16 +202,44 @@ int main(void)
     LOG_INF("APP module log: value=%d", 999);
     print_separator();
 
-#if defined(WW_LOG_MODE_ENCODE) && defined(WW_LOG_ENCODE_RAM_BUFFER_EN)
-    /* ===== RAM Buffer Dump ===== */
-    print_test_header("RAM Buffer Dump");
-    printf("Dumping all encoded logs from RAM buffer...\n");
-    ww_log_ram_dump();
+#if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
+    /* ===== Flush Mechanism Test ===== */
+    print_test_header("Flush Mechanism Test");
+
+    /* Process any pending flush requests */
+    printf("Processing flush requests...\n");
+    log_flush_process();
+
+    /* Show RAM buffer status */
+    printf("RAM buffer usage: %u bytes\n", log_ram_get_usage());
+    printf("RAM buffer available: %u bytes\n", log_ram_get_available());
+
+    /* Get flush statistics */
+    U32 total_flushes, failed_flushes;
+    U16 last_flush_size;
+    log_flush_get_stats(&total_flushes, &failed_flushes, &last_flush_size);
+    printf("Flush statistics:\n");
+    printf("  Total flushes: %u\n", total_flushes);
+    printf("  Failed flushes: %u\n", failed_flushes);
+    printf("  Last flush size: %u bytes\n", last_flush_size);
     print_separator();
 
-    printf("Clearing RAM buffer...\n");
-    ww_log_ram_clear();
-    printf("Buffer cleared. Current count: %u\n", ww_log_ram_get_count());
+    /* ===== RAM Buffer Dump ===== */
+    print_test_header("RAM Buffer Dump");
+    printf("Dumping RAM buffer content...\n");
+    log_ram_dump_hex();
+    print_separator();
+
+    /* Manual flush test */
+    print_test_header("Manual Flush Test");
+    printf("Triggering manual flush...\n");
+    int flush_ret = log_flush_now();
+    if (flush_ret == 0) {
+        printf("Manual flush completed successfully\n");
+    } else {
+        printf("Manual flush failed with error: %d\n", flush_ret);
+    }
+    printf("RAM buffer usage after flush: %u bytes\n", log_ram_get_usage());
     print_separator();
 #endif
 
@@ -215,11 +256,20 @@ int main(void)
     printf("- File-level differentiation: Enabled in all modules\n");
     printf("- Optional module parameter: Defaults to [DEFA] when not specified\n");
     printf("- Both string and encode modes supported\n");
+#if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
+    printf("- Phase2: RAM buffer and flush mechanism tested\n");
+#endif
     printf("\nNext steps:\n");
     printf("- Compile with 'make MODE=str' for string mode\n");
     printf("- Compile with 'make MODE=encode' for encode mode\n");
     printf("- Check code size with 'size bin/log_test_{str,encode}'\n");
     printf("- Decode binary logs with 'tools/log_decoder.py'\n");
+#if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
+    printf("\nIMPORTANT for Phase2:\n");
+    printf("- In your application, call log_flush_process() periodically\n");
+    printf("- Recommended: Call it in main loop every 10-100ms\n");
+    printf("- Or use log_flush_now() for immediate flush before critical events\n");
+#endif
     printf("=======================================\n\n");
 
     return 0;

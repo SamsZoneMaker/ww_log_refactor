@@ -13,6 +13,11 @@
 /* Include RAM buffer header if RAM output is enabled */
 #if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
 #include "ww_log_ram.h"
+#include "ww_log_flush.h"
+
+/* Statistics for flush requests */
+static U32 g_flush_request_count = 0;
+static U32 g_flush_request_busy = 0;
 #endif
 
 /* ========== Core Encoding Function ========== */
@@ -72,7 +77,25 @@ void ww_log_encode_output(U8 module_id, U16 log_id, U16 line, U8 level,
 
 #if (WW_LOG_ENCODE_OUTPUT_TO_RAM == 1)
     /* Output to RAM buffer */
-    log_ram_write(encoded_log, params, param_count);
+    int ram_ret = log_ram_write(encoded_log, params, param_count);
+
+    /* Check if flush is needed */
+    if (ram_ret == 1) {
+        /* RAM reached threshold, trigger automatic flush */
+        /* This is synchronous - flush happens immediately */
+        int flush_ret = log_flush_request(0);
+        g_flush_request_count++;
+
+        if (flush_ret == 0) {
+            /* Flush request accepted, execute it immediately */
+            log_flush_process();
+        } else {
+            /* Flush already in progress, this is normal */
+            /* The current LOG is already written to RAM */
+            /* Next flush will handle it */
+            g_flush_request_busy++;
+        }
+    }
 #else
     /* Output to UART as hex for debugging/decoding */
     /* Format: 0xHHHHHHHH 0xPPPPPPPP 0xPPPPPPPP ... */

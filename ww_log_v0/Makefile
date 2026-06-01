@@ -3,7 +3,7 @@
 
 # Compiler and flags
 CC = gcc
-BASE_CFLAGS = -Wall -Wextra -Iinclude -I src/demo -I src/brom -I src/test -I src/app -I src/drivers -g -O2 -Wno-unused-variable -Wno-unused-function
+BASE_CFLAGS = -Wall -Wextra -Iinclude -Isim -I src/demo -I src/brom -I src/test -I src/app -I src/drivers -g -O2 -Wno-unused-variable -Wno-unused-function -D__USE_MINGW_ANSI_STDIO=0
 LDFLAGS =
 
 # Color output
@@ -26,6 +26,7 @@ FILE_IDS_MK = $(BUILD_DIR)/file_ids.mk
 
 # Source files - include all modules
 ALL_SRCS = $(wildcard core/*.c) \
+           $(wildcard sim/*.c) \
            $(wildcard src/demo/*.c) \
            $(wildcard src/brom/*.c) \
            $(wildcard src/test/*.c) \
@@ -78,6 +79,7 @@ all: gen-log-ids $(TARGET)
 # Create directories
 $(BUILD_DIR) $(BIN_DIR):
 	@mkdir -p $(BUILD_DIR)/core
+	@mkdir -p $(BUILD_DIR)/sim
 	@mkdir -p $(BUILD_DIR)/src/demo
 	@mkdir -p $(BUILD_DIR)/src/brom
 	@mkdir -p $(BUILD_DIR)/src/test
