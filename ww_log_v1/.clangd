@@ -1,0 +1,35 @@
+# clangd 配置文件，由 clangd_config_generator 生成
+CompileFlags:
+  Add:
+    - -I.
+    - -Iinclude
+    - -Isim
+    - -Isrc
+    - -Isrc/demo
+    - -Isrc/drivers
+    - -Isrc/test
+    - -D_GNU_SOURCE
+    - -D__USE_MINGW_ANSI_STDIO=0
+    - -DCURRENT_FILE_ID=
+    - -DCURRENT_MODULE_ID=
+    - -DCURRENT_MODULE_STATIC_EN=
+    - -D__NOTDIR_FILE__=
+    - -DCURRENT_MODULE_STATIC_EN=0
+  Remove:
+    - -W*
+    - -std=*
+    - -O*
+
+Diagnostics:
+  UnusedIncludes: false
+  MissingIncludes: false
+
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  VariableTypes: true
+  DeducedTypes: true
+
+Index:
+  Background: Build
+  StandardLibrary: true

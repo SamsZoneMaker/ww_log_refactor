@@ -1,0 +1,14 @@
+# Build output
+build/
+bin/
+
+# Simulation external storage + dump artifacts
+sim_data/
+ram_dump.*
+storage_dump.*
+log.hex
+log.txt
+
+# Note: ww_log_map.json is generated but COMMITTED (drives build + decode).
+#       include/auto_file_ids.h is derived by `make` from the map.
+include/auto_file_ids.h

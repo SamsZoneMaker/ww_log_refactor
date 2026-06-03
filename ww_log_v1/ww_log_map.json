@@ -1,0 +1,153 @@
+{
+  "meta": {
+    "version": "",
+    "build_time": "2026-06-03T09:46:52Z",
+    "encoding": "file12_line14_pcnt6"
+  },
+  "modules": {
+    "1": {
+      "name": "DEMO",
+      "enable": true
+    },
+    "2": {
+      "name": "TEST",
+      "enable": false
+    },
+    "4": {
+      "name": "DRIVERS",
+      "enable": true
+    }
+  },
+  "files": {
+    "128": {
+      "path": "src/demo/demo_init.c",
+      "module": "DEMO",
+      "present": true
+    },
+    "129": {
+      "path": "src/demo/demo_process.c",
+      "module": "DEMO",
+      "present": true
+    },
+    "256": {
+      "path": "src/test/test_unit.c",
+      "module": "TEST",
+      "present": true
+    },
+    "512": {
+      "path": "src/drivers/drv_uart.c",
+      "module": "DRIVERS",
+      "present": true
+    }
+  },
+  "entries": [
+    {
+      "file_id": 128,
+      "line": 10,
+      "level": "INF",
+      "fmt": "Demo module initializing..."
+    },
+    {
+      "file_id": 128,
+      "line": 14,
+      "level": "DBG",
+      "fmt": "Checking hardware..."
+    },
+    {
+      "file_id": 128,
+      "line": 17,
+      "level": "INF",
+      "fmt": "Hardware check passed, code=%d"
+    },
+    {
+      "file_id": 128,
+      "line": 19,
+      "level": "ERR",
+      "fmt": "Hardware check failed!"
+    },
+    {
+      "file_id": 128,
+      "line": 22,
+      "level": "WRN",
+      "fmt": "Demo init completed with warnings, total=%d, failed=%d"
+    },
+    {
+      "file_id": 129,
+      "line": 10,
+      "level": "DBG",
+      "fmt": "Processing task..."
+    },
+    {
+      "file_id": 129,
+      "line": 13,
+      "level": "ERR",
+      "fmt": "Invalid task ID!"
+    },
+    {
+      "file_id": 129,
+      "line": 17,
+      "level": "INF",
+      "fmt": "Task started, id=%d"
+    },
+    {
+      "file_id": 129,
+      "line": 22,
+      "level": "WRN",
+      "fmt": "Result is large, id=%d, result=%d"
+    },
+    {
+      "file_id": 129,
+      "line": 25,
+      "level": "INF",
+      "fmt": "Task completed, id=%d, result=%d"
+    },
+    {
+      "file_id": 256,
+      "line": 14,
+      "level": "INF",
+      "fmt": "Unit tests starting (this log is statically disabled)"
+    },
+    {
+      "file_id": 256,
+      "line": 15,
+      "level": "DBG",
+      "fmt": "case 1 value=%d"
+    },
+    {
+      "file_id": 256,
+      "line": 16,
+      "level": "ERR",
+      "fmt": "this error is also compiled out"
+    },
+    {
+      "file_id": 512,
+      "line": 10,
+      "level": "INF",
+      "fmt": "UART init, baud=%d"
+    },
+    {
+      "file_id": 512,
+      "line": 11,
+      "level": "DBG",
+      "fmt": "UART FIFO depth=%d"
+    },
+    {
+      "file_id": 512,
+      "line": 16,
+      "level": "DBG",
+      "fmt": "UART sending, length=%d"
+    },
+    {
+      "file_id": 512,
+      "line": 18,
+      "level": "WRN",
+      "fmt": "UART payload large, length=%d"
+    },
+    {
+      "file_id": 512,
+      "line": 20,
+      "level": "INF",
+      "fmt": "UART sent %d bytes"
+    }
+  ]
+}
