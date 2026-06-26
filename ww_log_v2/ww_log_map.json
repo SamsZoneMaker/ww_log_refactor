@@ -1,7 +1,7 @@
 {
   "meta": {
     "version": "",
-    "build_time": "2026-06-26T08:11:56Z",
+    "build_time": "2026-06-26T08:44:01Z",
     "encoding": "file12_line14_pcnt6"
   },
   "modules": {
@@ -62,25 +62,31 @@
     },
     {
       "file_id": 129,
-      "line": 13,
+      "line": 16,
+      "level": "INF",
+      "fmt": "burst i=%d v=%x"
+    },
+    {
+      "file_id": 129,
+      "line": 24,
       "level": "ERR",
       "fmt": "demo_process: invalid task_id=%d"
     },
     {
       "file_id": 129,
-      "line": 17,
+      "line": 28,
       "level": "INF",
       "fmt": "demo_process: start, task_id=%d"
     },
     {
       "file_id": 129,
-      "line": 18,
+      "line": 29,
       "level": "DBG",
       "fmt": "demo_process: inner loop x=%d y=%d"
     },
     {
       "file_id": 129,
-      "line": 19,
+      "line": 30,
       "level": "INF",
       "fmt": "demo_process: done, task_id=%d"
     },

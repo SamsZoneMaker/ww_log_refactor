@@ -1,9 +1,8 @@
 /**
  * @file drivers/eeprom.h
- * @brief Sim stub: I2C EEPROM driver API.
- *
- * Never called in sim (CONFIG_N_LOG_BACKEND_EXT_MEM is off).
- * Stubs exist only to satisfy the unconditional includes in n_ww_log_storage.c.
+ * @brief Sim I2C EEPROM driver API (file-backed, implemented in
+ *        sim_ext_storage.c). Signatures match the firmware driver:
+ *        (dev, offset, data, len). Only used when the EXT_MEM backend is on.
  */
 
 #ifndef __DRIVERS_EEPROM_H__
@@ -11,18 +10,9 @@
 
 #include "def.h"
 
-struct device; /* opaque in sim, matches flash.h declaration */
+struct device; /* opaque handle, concrete in sim_ext_storage.c */
 
-static inline int eeprom_read(const struct device *dev, U32 offset, U8 *buf, U32 len)
-{
-    (void)dev; (void)offset; (void)buf; (void)len;
-    return WW_ERR;
-}
-
-static inline int eeprom_write(const struct device *dev, U32 offset, const U8 *buf, U32 len)
-{
-    (void)dev; (void)offset; (void)buf; (void)len;
-    return WW_ERR;
-}
+int eeprom_read(const struct device *dev, U32 offset, U8 *buf, U32 len);
+int eeprom_write(const struct device *dev, U32 offset, U8 *buf, U32 len);
 
 #endif /* __DRIVERS_EEPROM_H__ */

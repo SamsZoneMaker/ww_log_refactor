@@ -28,12 +28,9 @@ extern "C"
 #include "n_ww_log_storage.h"
 #endif
 
-#if !defined(CONFIG_N_LOG_MODE_STRING) && !defined(CONFIG_N_LOG_MODE_ENCODE)
-#define N_LOG_ERR(...)    do { } while(0)
-#define N_LOG_WRN(...)    do { } while(0)
-#define N_LOG_INF(...)    do { } while(0)
-#define N_LOG_DBG(...)    do { } while(0)
-#endif
+/* In DISABLED mode the N_LOG_* macros expand to no-ops; they are defined in
+ * n_ww_log_output.h (pulled in via n_ww_log_control.h) so every TU that uses the
+ * logging/return-code macros sees them, with or without including this header. */
 
 /*************************** macro definition end *****************************/
 

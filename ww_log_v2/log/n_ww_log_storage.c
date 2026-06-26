@@ -41,7 +41,7 @@ static LOG_RAM_BUFFER_T g_ram_buffer = {0};
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 static const struct device *g_extmem_dev = NULL;
 static LOG_EXT_CTX_T g_log_ext_ctx = {0};
-static LOG_EXT_FOOTER_T g_log_ext_footer = {0};
+/* footer is built on the fly in ext_footer_write() -- no persistent copy kept */
 #endif
 /*************************** static variable end *****************************/
 
@@ -91,77 +91,132 @@ static WW_RTN validate_header(const LOG_RAM_HEADER_T *header)
 }
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
-static void init_ext_footer(LOG_EXT_FOOTER_T *footer)
+
+/* ---- device-level access (type-dispatched), absolute partition offsets ---- */
+static int ext_dev_write(U32 abs_off, U8 *buf, U32 len)
 {
-    ww_memset(footer, 0xff, sizeof(LOG_EXT_FOOTER_T));
-
-    footer->magic = LOG_EXTMEM_MAGIC;
-    footer->mem_type = g_log_ext_ctx.ext_mem_type;
-    footer->full_tags = 0;
-    footer->init_timestamp = ww_cycle_get_32();
-    footer->last_flush_timestamp = 0;
-    footer->log_count = 0;
-    footer->reserved1 = 0;
-    footer->reserved2 = 0;
-
-    footer->checksum = LOG_CALC_STRUCT_CHECKSUM(footer);
-}
-
-static int log_ext_mem_write(U8 *data, U32 len)
-{
-    int ret;
-
-    /* Step 0: Make sure already initialized for using */
-    if (g_log_ext_ctx.initialized != WW_TRUE)
-    {
-        int ret = log_ext_mem_init();
-        if (ret != LOG_EXT_OK && ret != LOG_EXT_ERR_NO_EXT_MEM)
-        {
-            return ret;
-        }
-    }
-
-    if (g_extmem_dev == NULL || g_log_ext_ctx.log_part_valid != WW_TRUE)
-    {
-        return LOG_EXT_ERR_NO_LOG_PART;
-    }
-
-    if (g_log_ext_ctx.ext_write_offset + len > g_log_ext_ctx.log_size)
-    {
-        // ww_printf("[LOG][EXT]: Partition full\n");
-        return LOG_EXT_ERR_PT_FULL;
-    }
-
-    U32 write_offset = g_log_ext_ctx.log_offset + g_log_ext_ctx.ext_write_offset;
     if (g_log_ext_ctx.ext_mem_type == EXT_MEM_FLASH)
     {
-        ww_printf("[LOG][EXT]: Writing %u bytes to Flash at 0x%X\n",
-            len, write_offset);
-        ret = flash_write(g_extmem_dev, write_offset, data, len);
+        return flash_write(g_extmem_dev, abs_off, buf, len);
     }
-    else if (g_log_ext_ctx.ext_mem_type == EXT_MEM_EEPROM)
+    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_EEPROM)
     {
-        ww_printf("[LOG][EXT]: Writing %u bytes to EEPROM at 0x%X\n", len, write_offset);
-        ret = eeprom_write(g_extmem_dev, write_offset, data, len);
+        return eeprom_write(g_extmem_dev, abs_off, buf, len);
     }
-    else
-    {
-        return LOG_EXT_ERR_WRITE_FAIL;
-    }
-
-    if (ret == WW_OK)
-    {
-        g_log_ext_ctx.ext_write_offset += len;
-
-        /* Todo: Debugging */
-        if (g_log_ext_ctx.ext_write_offset > g_log_ext_ctx.log_size)
-        {
-            // ww_printf("[LOG][EXT]: Error!! Over the log area!\n");
-        }
-    }
-
-    return (ret == 0) ? LOG_EXT_OK : LOG_EXT_ERR_WRITE_FAIL;
+    return WW_ERR;
 }
+
+static int ext_dev_read(U32 abs_off, U8 *buf, U32 len)
+{
+    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_FLASH)
+    {
+        return flash_read(g_extmem_dev, abs_off, buf, len);
+    }
+    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_EEPROM)
+    {
+        return eeprom_read(g_extmem_dev, abs_off, buf, len);
+    }
+    return WW_ERR;
+}
+
+/* Erase one block slot before re-writing it.
+ * NOTE (real HW): NOR flash erase granularity is a sector (often 4KB), so a 512B
+ * block ring can only be overwritten in place on EEPROM (byte-writable). On NOR
+ * the whole LOG partition is one sector here; sub-sector slot erase is not
+ * possible on real flash -> a flash ring needs sector-aware logic. TODO when the
+ * flash backend is exercised on target. EEPROM (the primary path) is a no-op. */
+static void ext_dev_erase_block(U32 abs_off)
+{
+    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_FLASH)
+    {
+        (void)flash_erase(g_extmem_dev, abs_off, LOG_EXT_BLOCK_SIZE);
+    }
+}
+
+/* Erase / clear the whole LOG partition at init.
+ * BUGFIX: the old init called eeprom_write(dev, off, 0, size) -- data=NULL, which
+ * the driver rejects (-EINVAL), so the area was never actually cleared. */
+static int ext_partition_erase(void)
+{
+    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_FLASH)
+    {
+        return flash_erase(g_extmem_dev, g_log_ext_ctx.log_offset, g_log_ext_ctx.log_size);
+    }
+    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_EEPROM)
+    {
+        static U8 clr[256];
+        U32 off = g_log_ext_ctx.log_offset;
+        U32 rem = g_log_ext_ctx.log_size;
+        ww_memset(clr, 0xFF, sizeof(clr));
+        while (rem > 0)
+        {
+            U32 chunk = (rem > sizeof(clr)) ? sizeof(clr) : rem;
+            if (eeprom_write(g_extmem_dev, off, clr, chunk) != WW_OK)
+            {
+                return WW_ERR;
+            }
+            off += chunk;
+            rem -= chunk;
+        }
+        return WW_OK;
+    }
+    return WW_ERR;
+}
+
+/* Write the ring-control footer to the fixed tail slot [log_size-32, log_size). */
+static void ext_footer_write(void)
+{
+    LOG_EXT_FOOTER_T f;
+    U32 foff = g_log_ext_ctx.log_offset + g_log_ext_ctx.log_size - LOG_EXT_FOOTER_SIZE;
+
+    ww_memset(&f, 0, sizeof(f));
+    f.magic                = LOG_EXTMEM_MAGIC;
+    f.mem_type             = (U16)g_log_ext_ctx.ext_mem_type;
+    f.write_slot           = g_log_ext_ctx.write_slot;
+    f.wrap_count           = g_log_ext_ctx.wrap_count;
+    f.next_seq             = g_log_ext_ctx.next_seq;
+    f.log_count            = g_ram_buffer.header->log_count;
+    f.last_flush_timestamp = ww_cycle_get_32();
+    f.checksum             = LOG_CALC_STRUCT_CHECKSUM(&f);
+
+    ext_dev_erase_block(foff);
+    (void)ext_dev_write(foff, (U8 *)&f, sizeof(f));
+}
+
+/* Pack whole entries from the RAM ring (oldest first) into a block payload,
+ * never splitting an entry, up to LOG_EXT_PAYLOAD_SIZE bytes. Returns payload
+ * bytes packed; *ecount = number of entries. Does NOT advance read_index -- the
+ * caller does that under the same lock that snapshots the data. */
+static U16 ram_pack_block(U8 *dst, U16 *ecount)
+{
+    U16 ri     = g_ram_buffer.header->read_index;
+    U16 used   = get_current_usage();
+    U16 packed = 0;
+    U16 count  = 0;
+
+    while (packed < used)
+    {
+        U32 ehdr = *(U32 *)(g_ram_buffer.data + ri);
+        U8  pcnt = (U8)N_WW_LOG_PCNT_OF(ehdr);
+        U16 esz  = 4 + (U16)pcnt * 4;
+        U16 b;
+
+        if ((U32)packed + esz > LOG_EXT_PAYLOAD_SIZE)
+        {
+            break;
+        }
+        for (b = 0; b < esz; b += 4)
+        {
+            *(U32 *)(dst + packed + b) = *(U32 *)(g_ram_buffer.data + ri);
+            ri = log_ram_get_next_index(ri);
+        }
+        packed += esz;
+        count++;
+    }
+    *ecount = count;
+    return packed;
+}
+
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 
 /*************************** static function end *****************************/
@@ -634,33 +689,35 @@ WW_RTN log_ext_mem_init(void)
     g_log_ext_ctx.log_size = log_entry->part_size;
     g_log_ext_ctx.log_part_valid = WW_TRUE;
 
-    /* Step 4: Init log area of extmem */
-    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_FLASH)
+    /* Step 4: Compute the block-ring geometry and clear the LOG partition. */
+    g_log_ext_ctx.block_count = (U16)((g_log_ext_ctx.log_size - LOG_EXT_FOOTER_SIZE)
+                                      / LOG_EXT_BLOCK_SIZE);
+    g_log_ext_ctx.write_slot       = 0;
+    g_log_ext_ctx.wrap_count       = 0;
+    g_log_ext_ctx.next_seq         = 0;
+    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset;
+
+    if (g_log_ext_ctx.block_count == 0)
     {
-        flash_erase(g_extmem_dev, g_log_ext_ctx.log_offset, g_log_ext_ctx.log_size);
-        g_log_ext_ctx.ext_write_offset = 0;
-        // ww_printf("[LOG][EXT]: Erasing Flash ... \n");
-    }
-    else if (g_log_ext_ctx.ext_mem_type == EXT_MEM_EEPROM)
-    {
-        eeprom_write(g_extmem_dev, g_log_ext_ctx.log_offset, 0, g_log_ext_ctx.log_size);
-        g_log_ext_ctx.ext_write_offset = 0;
-        // ww_printf("[LOG][EXT]: Initializing eeprom log area ...\n");
-    }
-    else
-    {
-        return LOG_EXT_ERR_NO_EXT_MEM;
+        /* Partition too small to hold even one block + footer. */
+        g_log_ext_ctx.log_part_valid = WW_FALSE;
+        g_log_ext_ctx.initialized = WW_TRUE;
+        return LOG_EXT_ERR_NO_LOG_PART;
     }
 
-    init_ext_footer(&g_log_ext_footer);
+    if (ext_partition_erase() != WW_OK)
+    {
+        g_log_ext_ctx.initialized = WW_TRUE;
+        return LOG_EXT_ERR_CLEAR_FAIL;
+    }
+
+    ext_footer_write();
     g_log_ext_ctx.initialized = WW_TRUE;
     return LOG_EXT_OK;
 }
 
 int log_ext_mem_clear(void)
 {
-    int ret = 0;
-
     if (g_extmem_dev == NULL || g_log_ext_ctx.log_part_valid == 0)
     {
         return LOG_EXT_ERR_NO_LOG_PART;
@@ -668,156 +725,127 @@ int log_ext_mem_clear(void)
 
     ww_printf("[LOG][EXT]: Clearing log partition ...\n");
 
-    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_FLASH)
-    {
-        ret = flash_erase(g_extmem_dev, g_log_ext_ctx.log_offset, g_log_ext_ctx.log_size);
-    }
-    else if (g_log_ext_ctx.ext_mem_type == EXT_MEM_EEPROM)
-    {
-        static U8 clear_buf[256];
-        ww_memset(clear_buf, 0xFF, sizeof(clear_buf));
-
-        U32 offset = g_log_ext_ctx.log_offset;
-        U32 remaining = g_log_ext_ctx.log_size;
-
-        while (remaining > 0)
-        {
-            U32 chunk = (remaining > sizeof(clear_buf)) ? sizeof(clear_buf) : remaining;
-            ret = eeprom_write(g_extmem_dev, offset, clear_buf, chunk);
-            if (ret != 0) break;
-            offset += chunk;
-            remaining -= chunk;
-        }
-    }
-
-    if (ret == WW_OK)
-    {
-        g_log_ext_ctx.ext_write_offset = 0;
-        ww_printf("[LOG][EXT]: Clear done\n");
-
-        return LOG_EXT_OK;
-    }
-    else
+    if (ext_partition_erase() != WW_OK)
     {
         return LOG_EXT_ERR_CLEAR_FAIL;
     }
+
+    /* Reset the ring back to slot 0. */
+    g_log_ext_ctx.write_slot       = 0;
+    g_log_ext_ctx.wrap_count       = 0;
+    g_log_ext_ctx.next_seq         = 0;
+    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset;
+    ext_footer_write();
+
+    ww_printf("[LOG][EXT]: Clear done\n");
+    return LOG_EXT_OK;
 }
 
+/**
+ * @brief Flush ONE block of whole entries from the RAM ring to external storage.
+ *
+ * Packs as many complete entries as fit in a LOGH block payload (never splitting
+ * an entry), stamps a per-block CRC, and writes the block to the current ring
+ * slot, then updates the tail footer. On RING policy the oldest slot is
+ * overwritten on wrap; on FREEZE flushing stops once every slot is filled.
+ *
+ * Drains one block per call (matches the "~512B per move" cadence). The flush
+ * task re-arms while pending_len stays above threshold, so a backlog drains over
+ * successive wake-ups.
+ *
+ * @return LOG_EXT_OK on success/no-op, or a LOG_EXT_ERR_* code.
+ */
 int log_ram_flush(void)
 {
-    int ret;
     LOG_RAM_HEADER_T *header = g_ram_buffer.header;
-    U16 read_idx;
-    U32 flush_len;
-    static U8 temp_buf[1024];
+    static U8 block[LOG_EXT_BLOCK_SIZE];
+    LOG_BLOCK_HEADER_T *bh = (LOG_BLOCK_HEADER_T *)block;
+    U8 *payload = block + LOG_EXT_BLOCK_HEADER_SIZE;
+    U16 packed, ecount, b, ri;
+    U32 slot_off;
+    int ret;
+
+    if (log_ext_mem_available() == WW_FALSE)
+    {
+        return LOG_EXT_ERR_NO_LOG_PART;
+    }
 
     log_mutex_lock_wait();
 
-    if (header->pending_len == 0)
+    if (get_current_usage() == 0)
     {
         log_mutex_unlock();
         return LOG_EXT_OK;
     }
 
-    ww_printf("[LOG_RAM]: Flush triggered, pending_len = %u, write_index = %u\n",
-              header->pending_len, header->write_index);
-
-    if (log_ext_mem_available() == WW_FALSE)
+#ifdef CONFIG_N_LOG_EXT_POLICY_FREEZE
+    if (log_ext_mem_is_full() == WW_TRUE)
     {
-        ww_printf("[LOG_RAM]: External storage not available, clearing RAM\n");
-        log_ram_index_reset();
         log_mutex_unlock();
-        return LOG_EXT_ERR_NO_LOG_PART;
+        return LOG_EXT_ERR_PT_FULL;   /* archive frozen: keep earliest logs */
     }
+#endif
 
-    if (log_ext_mem_is_full() == WW_TRUE || g_log_ext_footer.full_tags == WW_TRUE)
+    /* Snapshot one block of whole entries, then advance the RAM consume cursor
+     * (all under the lock so writers see a consistent ring). */
+    ww_memset(block, 0xFF, sizeof(block));   /* 0xFF padding == erased/end marker */
+    packed = ram_pack_block(payload, &ecount);
+    if (packed == 0)
     {
-        ww_printf("[LOG_RAM]: External storage full, skip flush\n");
         log_mutex_unlock();
-        return LOG_EXT_ERR_PT_FULL;
+        return LOG_EXT_OK;
     }
 
-    read_idx = header->read_index;
-    flush_len = header->pending_len;
-
-    /* Restriction 1: Data flush cannot exceed the remaining external storage space. */
-    U32 ext_remaining = g_log_ext_ctx.log_size - g_log_ext_ctx.ext_write_offset;
-    ww_printf("[LOG][EXT]: Truncated flush to %u (ext remaining)\n", ext_remaining);
-    if (flush_len > ext_remaining)
+    ri = header->read_index;
+    for (b = 0; b < packed; b += 4)
     {
-        flush_len = ext_remaining;
-        ww_printf("[LOG_RAM]: Truncate flush to %u (ext remaining)\n", flush_len);
+        ri = log_ram_get_next_index(ri);
     }
-
-    /* Limitation 2: Flush cannot exceed the size of the temporary buffer zone. */
-    if (flush_len > sizeof(temp_buf))
+    header->read_index = ri;
+    if (header->pending_len >= packed)
     {
-        flush_len = sizeof(temp_buf);
-    }
-
-    /* Restriction 3: Cannot extend beyond the end of the buffer (to avoid wrap-around processing) */
-    if (read_idx + flush_len > g_ram_buffer.data_size)
-    {
-        flush_len = g_ram_buffer.data_size - read_idx;
-    }
-
-    ww_printf("[LOG_RAM]: Flushing (%u, %u), len=%u\n",
-              read_idx, read_idx + flush_len, flush_len);
-
-    ww_memcpy(temp_buf, g_ram_buffer.data + read_idx, flush_len);
-
-    /* Update RAM index */
-    header->read_index = read_idx + flush_len;
-    if (header->read_index >= g_ram_buffer.data_size)
-    {
-        header->read_index = 0;
-    }
-    header->pending_len -= flush_len;
-
-    g_log_ext_footer.log_count = header->log_count;
-
-    log_mutex_unlock();
-
-    ret = log_ext_mem_write(temp_buf, flush_len);
-
-    if (ret == LOG_EXT_OK)
-    {
-        header->flush_count++;
-        g_log_ext_footer.last_flush_timestamp = ww_cycle_get_32();
-        ww_printf("[LOG_RAM]: Flush OK, wrote %u bytes, flush_count = %u\n",
-                  flush_len, header->flush_count);
+        header->pending_len -= packed;
     }
     else
     {
-        ww_printf("[LOG_RAM]: Flush FAILED, ret=%d, expected: %d \n", ret, LOG_EXT_ERR_NO_LOG_PART);
-        log_mutex_lock_wait();
-        header->read_index = read_idx;
-        header->pending_len += flush_len;
-        log_mutex_unlock();
+        header->pending_len = 0;
     }
+    header->flush_count++;
+    header->checksum = LOG_CALC_STRUCT_CHECKSUM(header);
 
-    if (log_ram_is_need_flush() == WW_TRUE)
+    bh->magic       = LOG_BLOCK_MAGIC;
+    bh->seq         = g_log_ext_ctx.next_seq;
+    bh->timestamp   = ww_cycle_get_32();
+    bh->data_size   = packed;
+    bh->entry_count = ecount;
+    bh->crc         = log_calc_checksum(payload, packed); /* payload is 4-aligned */
+    bh->reserved1   = 0;
+    bh->reserved2   = 0;
+
+    slot_off = g_log_ext_ctx.log_offset
+             + (U32)g_log_ext_ctx.write_slot * LOG_EXT_BLOCK_SIZE;
+
+    /* Advance ring position (next slot, wrap -> overwrite oldest). */
+    g_log_ext_ctx.next_seq++;
+    g_log_ext_ctx.write_slot++;
+    if (g_log_ext_ctx.write_slot >= g_log_ext_ctx.block_count)
     {
-        log_flush_notify();
+        g_log_ext_ctx.write_slot = 0;
+        g_log_ext_ctx.wrap_count++;
     }
+    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset
+             + (U32)g_log_ext_ctx.write_slot * LOG_EXT_BLOCK_SIZE;
 
-    if (log_ext_mem_is_full() == WW_TRUE)
-    {
-        if (g_log_ext_footer.full_tags == WW_FALSE)
-        {
-            g_log_ext_footer.full_tags = WW_TRUE;
-            ww_memcpy(temp_buf, &g_log_ext_footer, sizeof(LOG_EXT_FOOTER_T));
-            ret = log_ext_mem_write(temp_buf, sizeof(LOG_EXT_FOOTER_T));
-            if (ret == 0)
-            {
-                // ww_printf("[LOG][EXT]: Filled footer success.");
-                return LOG_EXT_OK;
-            }
-            return LOG_EXT_ERR_PT_FULL;
-        }
-    }
+    log_mutex_unlock();
 
-    return ret;
+    /* Slow device I/O outside the lock. Write only header+payload (the slot tail
+     * keeps whatever was there; the decoder uses data_size and a fixed slot
+     * stride, so stale tail bytes are skipped). */
+    ext_dev_erase_block(slot_off);
+    ret = ext_dev_write(slot_off, block, LOG_EXT_BLOCK_HEADER_SIZE + packed);
+    ext_footer_write();
+
+    return (ret == WW_OK) ? LOG_EXT_OK : LOG_EXT_ERR_WRITE_FAIL;
 }
 
 WW_BOOL log_ram_is_need_flush(void)
@@ -870,24 +898,53 @@ U32 log_ext_get_write_offset(void)
     return g_log_ext_ctx.ext_write_offset;
 }
 
+U16 log_ext_get_block_count(void)
+{
+    return g_log_ext_ctx.block_count;
+}
+
+U16 log_ext_get_write_slot(void)
+{
+    return g_log_ext_ctx.write_slot;
+}
+
+U32 log_ext_get_wrap_count(void)
+{
+    return g_log_ext_ctx.wrap_count;
+}
+
+U32 log_ext_get_next_seq(void)
+{
+    return g_log_ext_ctx.next_seq;
+}
+
 WW_BOOL log_ext_mem_is_full(void)
 {
-    if (g_log_ext_ctx.ext_write_offset >= (g_log_ext_ctx.log_size - sizeof(LOG_EXT_FOOTER_T)))
-    {
-        return WW_TRUE;
-    }
-
+    /* FREEZE: "full" once every slot has been written once (wrapped) -> stop
+     * flushing to preserve the earliest logs.
+     * RING: never full -- the oldest slot is overwritten on wrap. */
+#ifdef CONFIG_N_LOG_EXT_POLICY_FREEZE
+    return (g_log_ext_ctx.wrap_count >= 1) ? WW_TRUE : WW_FALSE;
+#else
     return WW_FALSE;
+#endif
 }
 
 U32 log_ext_mem_get_used(void)
 {
-    return g_log_ext_ctx.ext_write_offset;
+    /* Bytes of block storage in use (capped at the block area when wrapped). */
+    U32 block_area = (U32)g_log_ext_ctx.block_count * LOG_EXT_BLOCK_SIZE;
+    if (g_log_ext_ctx.wrap_count > 0)
+    {
+        return block_area;
+    }
+    return (U32)g_log_ext_ctx.write_slot * LOG_EXT_BLOCK_SIZE;
 }
 
 U32 log_ext_mem_get_remaining(void)
 {
-    return g_log_ext_ctx.log_size - g_log_ext_ctx.ext_write_offset;
+    U32 block_area = (U32)g_log_ext_ctx.block_count * LOG_EXT_BLOCK_SIZE;
+    return block_area - log_ext_mem_get_used();
 }
 
 U32 log_ram_get_flush_count(void)

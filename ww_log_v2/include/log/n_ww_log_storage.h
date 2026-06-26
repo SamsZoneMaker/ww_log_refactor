@@ -23,7 +23,7 @@ extern "C"
 /* RAM buffer layout */
 #define LOG_RAM_HEADER_SIZE       sizeof(LOG_RAM_HEADER_T)  /* Header size in bytes */
 #define LOG_RAM_DATA_SIZE         (DLM_MAINTAIN_LOG_SIZE - LOG_RAM_HEADER_SIZE)
-#define LOG_RAM_FLUSH_THRESHOLD   (1 * 1024)
+#define LOG_RAM_FLUSH_THRESHOLD   (480)   /* ~one ext block payload (512B slot) */
 
 #define LOG_RAM_MAGIC             (0x574C4F47)
 
@@ -60,10 +60,11 @@ extern "C"
 #define LOG_EXTMEM_MAGIC          (0x474F4C46)   /* 'FLOG' - footer (ring control) */
 #define LOG_BLOCK_MAGIC           (0x4C4F4748)   /* 'LOGH' - per-block header       */
 
-#define LOG_EXT_BLOCK_SIZE        (1024)                       /* one ring slot   */
+#define LOG_EXT_BLOCK_SIZE        (512)                        /* one ring slot   */
 #define LOG_EXT_BLOCK_HEADER_SIZE (sizeof(LOG_BLOCK_HEADER_T)) /* 32 bytes        */
 #define LOG_EXT_FOOTER_SIZE       (sizeof(LOG_EXT_FOOTER_T))   /* 32 bytes        */
 #define LOG_EXT_PAYLOAD_SIZE      (LOG_EXT_BLOCK_SIZE - LOG_EXT_BLOCK_HEADER_SIZE)
+/* 4K partition: (4096-32)/512 = 7 ring slots (480B payload each), ~480B unused. */
 
 /* Ext-full policy: RING overwrites the oldest block; FREEZE stops flushing.
  * Exactly one must be defined (default RING, set in autoconf.h). */
@@ -228,6 +229,10 @@ U8   log_ext_get_initialized(void);
 U8   log_ext_get_part_valid(void);
 U32  log_ext_get_log_offset(void);
 U32  log_ext_get_write_offset(void);
+U16  log_ext_get_block_count(void);
+U16  log_ext_get_write_slot(void);
+U32  log_ext_get_wrap_count(void);
+U32  log_ext_get_next_seq(void);
 WW_BOOL log_ext_mem_is_full(void);
 U32  log_ext_mem_get_used(void);
 U32  log_ext_mem_get_remaining(void);

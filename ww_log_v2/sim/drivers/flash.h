@@ -1,10 +1,8 @@
 /**
  * @file drivers/flash.h
- * @brief Sim stub: SPI-NOR flash driver API.
- *
- * The real driver operates on a "struct device *" (Zephyr-style or custom).
- * In sim mode CONFIG_N_LOG_BACKEND_EXT_MEM is off, so these are never called.
- * The stubs exist only to satisfy includes in n_ww_log_storage.c.
+ * @brief Sim SPI-NOR flash driver API (file-backed, implemented in
+ *        sim_ext_storage.c). Signatures match the firmware driver:
+ *        (dev, offset, buf, len). Only used when the EXT_MEM backend is on.
  */
 
 #ifndef __DRIVERS_FLASH_H__
@@ -12,24 +10,10 @@
 
 #include "def.h"
 
-struct device; /* opaque in sim */
+struct device; /* opaque handle, concrete in sim_ext_storage.c */
 
-static inline int flash_read(const struct device *dev, U32 offset, U8 *buf, U32 len)
-{
-    (void)dev; (void)offset; (void)buf; (void)len;
-    return WW_ERR;
-}
-
-static inline int flash_write(const struct device *dev, U32 offset, const U8 *buf, U32 len)
-{
-    (void)dev; (void)offset; (void)buf; (void)len;
-    return WW_ERR;
-}
-
-static inline int flash_erase(const struct device *dev, U32 offset, U32 size)
-{
-    (void)dev; (void)offset; (void)size;
-    return WW_ERR;
-}
+int flash_read(const struct device *dev, U32 offset, U8 *buf, U32 len);
+int flash_write(const struct device *dev, U32 offset, U8 *buf, U32 len);
+int flash_erase(const struct device *dev, U32 offset, U32 size);
 
 #endif /* __DRIVERS_FLASH_H__ */

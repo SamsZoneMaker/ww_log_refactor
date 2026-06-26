@@ -162,6 +162,15 @@ void n_ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...
 #define N_LOG_DBG(fmt, ...)    do { } while (0)
 #endif
 
+#else  /* neither STRING nor ENCODE -> DISABLED: all LOG macros are no-ops.
+        * Defined here (not only in n_ww_log.h) so the N_RETURN_*_IF_TRUE helpers
+        * in n_ww_log_control.h still resolve N_LOG_ERR when a .c includes the
+        * control header without n_ww_log.h. */
+#define N_LOG_ERR(...)    do { } while (0)
+#define N_LOG_WRN(...)    do { } while (0)
+#define N_LOG_INF(...)    do { } while (0)
+#define N_LOG_DBG(...)    do { } while (0)
+
 #endif /* mode selection */
 
 

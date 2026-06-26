@@ -44,17 +44,22 @@ import struct
 
 LEVEL_NAMES = ("ERR", "WRN", "INF", "DBG")
 
-RAM_MAGIC      = 0x574C4F47          # 'WLOG' - LOG_RAM_HEADER at start of region
-BLOCK_MAGIC    = 0x4C4F4748          # 'LOGH' - LOG_BLOCK_HEADER before each block
+RAM_MAGIC      = 0x574C4F47          # 'WLOG' - LOG_RAM_HEADER_T at region start
+BLOCK_MAGIC    = 0x4C4F4748          # 'LOGH' - LOG_BLOCK_HEADER_T before each block
+FOOTER_MAGIC   = 0x474F4C46          # 'FLOG' - LOG_EXT_FOOTER_T ring control
 RAM_MAGIC_LE   = struct.pack('<I', RAM_MAGIC)
 BLOCK_MAGIC_LE = struct.pack('<I', BLOCK_MAGIC)
 ERASED         = 0xFFFFFFFF
 
-# Geometry of the RAM maintain region (ww_log_config.h).
-RAM_HEADER_SIZE   = 64
+# RAM maintain region geometry (n_ww_log_storage.h). v2 header is 32 bytes.
+RAM_HEADER_SIZE   = 32
 RAM_TOTAL_SIZE    = 4096
-RAM_DATA_SIZE     = RAM_TOTAL_SIZE - RAM_HEADER_SIZE
-BLOCK_HEADER_SIZE = 32
+RAM_DATA_SIZE     = RAM_TOTAL_SIZE - RAM_HEADER_SIZE   # 4064
+
+# External-storage block ring geometry (n_ww_log_storage.h).
+EXT_BLOCK_SIZE    = 512
+BLOCK_HEADER_SIZE = 28
+EXT_FOOTER_SIZE   = 32
 
 # Default read window when the caller does not pass an explicit length: one
 # whole maintain region / LOG partition. Reading a superset is fine -- the
@@ -203,12 +208,27 @@ def parse_entry_stream(buf, start, end):
     return frames
 
 
+def _sum_u32(payload):
+    """Match the firmware log_calc_checksum: sum of whole little-endian U32s."""
+    s = 0
+    for i in range(0, len(payload) - 3, 4):
+        s = (s + struct.unpack_from('<I', payload, i)[0]) & 0xFFFFFFFF
+    return s
+
+
 def parse_ram_region(buf, off, notes):
-    """Parse a 'WLOG' RAM maintain region, honouring the ring read/write idx."""
-    (_magic, _version, write_index, read_index, total_written, flush_count,
-     _last, overflow) = struct.unpack_from('<IIHHIIIB', buf, off)
-    notes.append("# RAM region: write=%d read=%d total=%d flushes=%d overflow=%d"
-                 % (write_index, read_index, total_written, flush_count, overflow))
+    """Parse a 'WLOG' RAM maintain region (v2 LOG_RAM_HEADER_T, 32 bytes),
+    honouring the ring read/write pointers and the OVERFLOW flag."""
+    (_magic, write_index, read_index, pending_len, flush_count,
+     overflow_count, flags, log_count, _r1, _r2, _crc) = \
+        struct.unpack_from('<IHHHHHHIIII', buf, off)
+    overflow = flags & 0x01            # LOG_FLAG_OVERFLOW
+    notes.append("# RAM region: write=%d read=%d pending=%d flushes=%d "
+                 "overflow_cnt=%d flags=0x%X log_count=%d"
+                 % (write_index, read_index, pending_len, flush_count,
+                    overflow_count, flags, log_count))
+    if flags & 0x08:                   # LOG_FLAG_CORRUPTED
+        notes.append("# WARNING: LOG_FLAG_CORRUPTED set (data chain failed validation)")
 
     data_off = off + RAM_HEADER_SIZE
     data = buf[data_off:data_off + RAM_DATA_SIZE]
@@ -222,24 +242,37 @@ def parse_ram_region(buf, off, notes):
     return parse_entry_stream(ordered, 0, len(ordered))
 
 
-def parse_logh_blocks(buf, off, notes):
-    """Walk one or more 'LOGH' storage blocks: 32B header + data_size bytes."""
-    frames = []
+def parse_block_ring(buf, notes):
+    """Parse the external-storage block ring: fixed 512B slots, each a
+    LOG_BLOCK_HEADER_T (28B 'LOGH' + payload). Slots are walked by stride,
+    validated by magic + payload CRC, then ordered by sequence number so a
+    wrapped ring (oldest slot overwritten) decodes in chronological order."""
     n = len(buf)
-    while off + BLOCK_HEADER_SIZE <= n:
-        magic, seq, _ts, data_size, entry_count, _ovf = \
-            struct.unpack_from('<IIIHHB', buf, off)
-        if magic != BLOCK_MAGIC:
+    slots = (n - EXT_FOOTER_SIZE) // EXT_BLOCK_SIZE if n > EXT_FOOTER_SIZE else n // EXT_BLOCK_SIZE
+    blocks = []
+    for i in range(max(slots, 0)):
+        off = i * EXT_BLOCK_SIZE
+        if off + BLOCK_HEADER_SIZE > n:
             break
-        notes.append("# block seq=%d size=%d entries=%d" % (seq, data_size, entry_count))
-        data_off = off + BLOCK_HEADER_SIZE
-        frames += parse_entry_stream(buf, data_off, min(data_off + data_size, n))
-        off = data_off + data_size
+        magic, seq, _ts, data_size, ecount, crc, _r1, _r2 = \
+            struct.unpack_from('<IIIHHIII', buf, off)
+        if magic != BLOCK_MAGIC:
+            continue                              # erased / never-written slot
+        payload = buf[off + BLOCK_HEADER_SIZE: off + BLOCK_HEADER_SIZE + data_size]
+        ok = (_sum_u32(payload) == crc)
+        notes.append("# slot %d: seq=%d size=%d entries=%d crc=%s"
+                     % (i, seq, data_size, ecount, "ok" if ok else "BAD"))
+        if ok:
+            blocks.append((seq, payload))
+    blocks.sort(key=lambda b: b[0])               # chronological by sequence
+    frames = []
+    for _seq, payload in blocks:
+        frames += parse_entry_stream(payload, 0, len(payload))
     return frames
 
 
 def parse_binary(data, notes):
-    """Auto-frame a binary dump by locating the first known magic."""
+    """Auto-frame a binary dump by locating the first known container magic."""
     iw = data.find(RAM_MAGIC_LE)
     il = data.find(BLOCK_MAGIC_LE)
     cands = [(i, k) for i, k in ((iw, 'ram'), (il, 'logh')) if i != -1]
@@ -250,8 +283,8 @@ def parse_binary(data, notes):
     if kind == 'ram':
         notes.append("# found RAM 'WLOG' header at offset 0x%X" % start)
         return parse_ram_region(data, start, notes)
-    notes.append("# found storage 'LOGH' block at offset 0x%X" % start)
-    return parse_logh_blocks(data, start, notes)
+    notes.append("# found storage 'LOGH' block ring (slot stride %dB)" % EXT_BLOCK_SIZE)
+    return parse_block_ring(data, notes)
 
 
 # ----------------------------------------------------------------------------
