@@ -43,6 +43,17 @@ void log_flush_notify(void);
 
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 
+/**
+ * @brief Create the log mutex. Must be called once at init whenever the RAM
+ *        backend is enabled (logs may be emitted from multiple tasks).
+ * @note  Previously the mutex was only created inside log_flush_task_init(),
+ *        which is EXT_MEM-gated -> in RAM-only builds the mutex stayed NULL and
+ *        log_mutex_lock() silently became a no-op (unprotected ring). Split out
+ *        so locking works independent of the external-storage backend.
+ * @return WW_OK on success, WW_ERR on failure.
+ */
+WW_RTN log_lock_init(void);
+
 WW_RTN log_mutex_lock(void);
 void log_mutex_lock_wait(void);
 void log_mutex_unlock(void);

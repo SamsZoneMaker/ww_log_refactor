@@ -77,6 +77,12 @@ void log_ram_init(bool force_clear)
     if (force_clear == WW_DISABLE)
     {
         rtn = validate_header(g_ram_buffer.header);
+        if (rtn == WW_OK && log_ram_validate_data() != WW_OK)
+        {
+            g_ram_buffer.header->flags |= LOG_FLAG_CORRUPTED;
+            g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
+            rtn = WW_ERR;
+        }
     }
 
     if (rtn != WW_OK || force_clear == WW_ENABLE)
@@ -84,6 +90,10 @@ void log_ram_init(bool force_clear)
         init_header(g_ram_buffer.header);
         ww_memset(g_ram_buffer.data, 0, g_ram_buffer.data_size);
     }
+
+    g_ram_buffer.header->log_count = 0;
+    g_ram_buffer.header->checksum  = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
+
     ww_printf("[LOG][RAM]: Initialized (force_clear=%u)\n", force_clear);
 }
 
@@ -111,55 +121,99 @@ U32 log_calc_checksum(const void *data, U32 len)
     return sum;
 }
 
+static void log_ram_drop_oldest(LOG_RAM_HEADER_T *header)
+{
+    U32 old_hdr  = *(U32 *)(g_ram_buffer.data + header->read_index);
+    U8  old_pcnt = (U8)N_WW_LOG_PCNT_OF(old_hdr);
+    U16 old_size = 4 + (U16)old_pcnt * 4;
+    U16 ri = header->read_index;
+    U16 b;
+
+    for (b = 0; b < old_size; b += 4)
+    {
+        ri = log_ram_get_next_index(ri);
+    }
+    header->read_index = ri;
+
+    if (header->overflow_count < 0xFFFF)
+    {
+        header->overflow_count++;
+    }
+    header->flags |= LOG_FLAG_OVERFLOW;
+}
+
 WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count)
 {
     LOG_RAM_HEADER_T *header = g_ram_buffer.header;
+    U16 write_idx;
+    U16 required = 4 + (U16)param_count * 4;
+    U8  i;
+
+    if (required > g_ram_buffer.data_size - 1)
+    {
+        return WW_OK;
+    }
 
     if (log_mutex_lock() != WW_OK)
     {
         return LOG_EXT_ERR_MUTEX_FAIL;
     }
 
-    U16 write_idx = header->write_index;
-    U16 required  = 4 + param_count * 4;
-    U16 available = log_ram_get_available();
-
-    if (required > available)
+    while (log_ram_get_available() < required)
     {
-        if (required > g_ram_buffer.data_size)
-        {
-            log_mutex_unlock();
-            return WW_OK;
-        }
-
-        U16 wrap_bytes = required - available;
-        write_idx = 0;
-
-        if (header->read_index < wrap_bytes)
-        {
-            U32 lost_bytes = header->read_index;
-            header->read_index = wrap_bytes;
-
-            (void)lost_bytes;
-            ww_printf("[LOG][RAM]: Buffer wrap, lost %u bytes of old data\n", lost_bytes);
-        }
+        log_ram_drop_oldest(header);
     }
 
+    write_idx = header->write_index;
     *(U32 *)(g_ram_buffer.data + write_idx) = encoded;
     write_idx = log_ram_get_next_index(write_idx);
-    header->log_count += 1;
 
-    for (U8 i = 0; i < param_count; i++)
+    for (i = 0; i < param_count; i++)
     {
         *(U32 *)(g_ram_buffer.data + write_idx) = params[i];
         write_idx = log_ram_get_next_index(write_idx);
     }
 
     header->write_index = write_idx;
+    header->log_count  += 1;
     header->checksum    = LOG_CALC_STRUCT_CHECKSUM(header);
 
     log_mutex_unlock();
     return WW_OK;
+}
+
+void log_ram_mark_error(void)
+{
+    g_ram_buffer.header->flags |= LOG_FLAG_ERROR;
+    g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
+}
+
+WW_RTN log_ram_validate_data(void)
+{
+    LOG_RAM_HEADER_T *header = g_ram_buffer.header;
+    U16 idx    = header->read_index;
+    U16 used   = get_current_usage();
+    U16 walked = 0;
+
+    while (walked < used)
+    {
+        U32 hdr  = *(U32 *)(g_ram_buffer.data + idx);
+        U8  pcnt = (U8)N_WW_LOG_PCNT_OF(hdr);
+        U16 size = 4 + (U16)pcnt * 4;
+        U16 b;
+
+        if (walked + size > used)
+        {
+            return WW_ERR;
+        }
+        for (b = 0; b < size; b += 4)
+        {
+            idx = log_ram_get_next_index(idx);
+        }
+        walked += size;
+    }
+
+    return (idx == header->write_index) ? WW_OK : WW_ERR;
 }
 
 void log_ram_dump_hex(void)

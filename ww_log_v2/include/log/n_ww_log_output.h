@@ -33,6 +33,22 @@ extern "C"
 #define CURRENT_MODULE_STATIC_EN    0    /* unregistered file -> logs off */
 #endif
 
+/* ==================== Encoded-entry accessors (mode-independent) ====================
+ * Entry header layout (32 bits), see CLAUDE.md §2:
+ *   31             20 19         6 5      0
+ *   +-----------------+------------+--------+
+ *   |   file_id (12)  |  line (14) |param_cnt|
+ *   +-----------------+------------+--------+
+ *                       file_id = [ module_id : 5 ][ offset : 7 ]
+ *
+ * These are defined for ALL modes: the storage layer parses entries (param
+ * count, file_id) to walk the ring / validate data even in STRING builds. */
+#define N_WW_LOG_FILEID_OF(encoded)    (((encoded) >> 20) & 0xFFF)
+#define N_WW_LOG_LINE_OF(encoded)      (((encoded) >> 6)  & 0x3FFF)
+#define N_WW_LOG_PCNT_OF(encoded)      ((encoded) & 0x3F)
+#define N_WW_LOG_MODULE_OF(file_id)    (((file_id) >> 7) & 0x1F)
+#define N_WW_LOG_OFFSET_OF(file_id)    ((file_id) & 0x7F)
+
 /*************************** macro definition end *****************************/
 
 
@@ -90,26 +106,12 @@ void n_ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
 
 #elif defined(CONFIG_N_LOG_MODE_ENCODE)
 
-/* Entry header layout (32 bits), see CLAUDE.md §2:
- * 31             20 19         6 5      0
- * +-----------------+------------+--------+
- * |   file_id (12)  |  line (14) |param_cnt|
- * +-----------------+------------+--------+
- * |
- * +-- file_id = [ module_id : 5 ][ offset : 7 ]
- */
-
+/* Pack (file_id, line, param_count) into the 32-bit entry header.
+ * The unpack accessors (N_WW_LOG_*_OF) live above, mode-independent. */
 #define N_WW_LOG_ENCODE(file_id, line, pcnt) \
     ( (((U32)(file_id)  & 0xFFF)  << 20) | \
       (((U32)(line)     & 0x3FFF) << 6)  | \
       (((U32)(pcnt)     & 0x3F)) )
-
-#define N_WW_LOG_FILEID_OF(encoded)    (((encoded) >> 20) & 0xFFF)
-#define N_WW_LOG_LINE_OF(encoded)      (((encoded) >> 6)  & 0x3FFF)
-#define N_WW_LOG_PCNT_OF(encoded)      ((encoded) & 0x3F)
-
-#define N_N_WW_LOG_MODULE_OF(file_id)    (((file_id) >> 7) & 0x1F)
-#define N_WW_LOG_OFFSET_OF(file_id)    ((file_id) & 0x7F)
 
 #define N_WW_LOG_ENCODE_MAX_PARAMS     16
 
@@ -165,12 +167,14 @@ void n_ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...
 
 /**
  * @brief Emit one encoded entry to all enabled backends.
- * @param encoded     32-bit entry header (see WW_LOG_ENCODE)
+ * @param encoded     32-bit entry header (see N_WW_LOG_ENCODE)
  * @param params      array of param_count U32 values (may be NULL if 0)
  * @param param_count number of parameters
- * @param sync        1 = bypass buffering / flush immediately (panic path)
+ * @param level       log level (N_WW_LOG_LEVEL_*); used by the RAM/storage
+ *                    backend for the storage-persist threshold and ERR flag.
+ *                    UART ignores it (already filtered upstream).
  */
-void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count);
+void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count, U8 level);
 
 #ifdef __cplusplus
 }

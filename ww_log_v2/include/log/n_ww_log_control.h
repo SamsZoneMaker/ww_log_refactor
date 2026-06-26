@@ -33,6 +33,18 @@ extern "C"
 #define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_DBG
 #endif
 
+/**
+ * Storage-persist threshold (compile-time). Entries with level > this are NOT
+ * written to the RAM ring / external storage; they still go to UART. level is
+ * not encoded, so the filter is applied at emit time and RAM == storage content.
+ * Change here in code (or override with -D). Default INF -> DBG is not persisted.
+ *   = N_WW_LOG_LEVEL_INF : persist ERR/WRN/INF, drop DBG
+ *   = N_WW_LOG_LEVEL_DBG : persist everything
+ */
+#ifndef N_WW_LOG_STORAGE_THRESHOLD
+#define N_WW_LOG_STORAGE_THRESHOLD    N_WW_LOG_LEVEL_INF
+#endif
+
 #define N_WW_LOG_MODULE_MAX    32
 
 #define N_RETURN_CODE_IF_TRUE(vExpression, rc) \

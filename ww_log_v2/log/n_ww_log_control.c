@@ -150,7 +150,15 @@ void n_ww_log_init(void)
     // ww_printf(")\n");
 
 #if (CONFIG_N_LOG_BACKEND_RAM == 1)
-    log_ram_init(WW_TRUE); /* try to preserve existing data (hot restart) */
+    /* Create the mutex up front so the RAM ring is protected even in builds
+     * without the external-storage flush task. */
+    log_lock_init();
+    /* force_clear = WW_FALSE: hot-restart preserve. log_ram_init() validates the
+     * existing header (magic + checksum) and keeps prior contents on a warm
+     * reboot; only a failed validation (or cold boot) re-initialises. Previously
+     * this passed WW_TRUE, which always wiped the buffer and defeated crash-log
+     * recovery (see bug #8). */
+    log_ram_init(WW_FALSE);
 #endif
 #if (CONFIG_N_LOG_BACKEND_EXT_MEM == 1)
     log_flush_task_init();

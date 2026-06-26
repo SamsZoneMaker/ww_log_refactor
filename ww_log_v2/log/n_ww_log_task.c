@@ -22,12 +22,16 @@
 
 /*************************** macro definition start ***************************/
 /* to be used only in this file */
+
+/* Mutex acquire timeout for the (RAM-backend) writer path. Lives outside the
+ * EXT_MEM guard because log_mutex_lock() is compiled whenever RAM is on. */
+#define LOG_WRITE_TIMEOUT_MS         (6)
+
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
 #define LOG_FLUSH_TASK_STACK_SIZE    (256)
 #define LOG_FLUSH_TASK_PRIORITY      (1)
 #define LOG_FLUSH_TIMEOUT_MS         (10000)
-#define LOG_WRITE_TIMEOUT_MS         (6)
 
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 /*************************** macro definition end *****************************/
@@ -128,10 +132,10 @@ WW_RTN log_flush_task_init(void)
     }
 
     /* ---------------------------------------------------
-     * Step 2: Create a mutex
+     * Step 2: Ensure the mutex exists. Normally created by log_lock_init()
+     *         from n_ww_log_init(); create here too as a safety net.
      * --------------------------------------------------- */
-    g_log_mutex = xSemaphoreCreateMutex();
-    if (g_log_mutex == NULL)
+    if (log_lock_init() != WW_OK)
     {
         ww_printf("LOG_FLUSH_TASK: Failed to create mutex\n");
         vSemaphoreDelete(g_flush_semaphore);
@@ -171,6 +175,25 @@ void log_flush_notify(void)
 
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 
+/**
+ * @brief Create the log mutex if it does not already exist.
+ *        Idempotent: safe to call from both n_ww_log_init() and
+ *        log_flush_task_init().
+ */
+WW_RTN log_lock_init(void)
+{
+    if (g_log_mutex != NULL)
+    {
+        return WW_OK;   /* already created */
+    }
+    g_log_mutex = xSemaphoreCreateMutex();
+    if (g_log_mutex == NULL)
+    {
+        return WW_ERR;
+    }
+    return WW_OK;
+}
+
 WW_RTN log_mutex_lock(void)
 {
     if (g_log_mutex == NULL)
@@ -182,7 +205,9 @@ WW_RTN log_mutex_lock(void)
         return WW_OK;
     }
 
-    return WW_FALSE;
+    /* BUGFIX: previously returned WW_FALSE (==0 == WW_OK) so the caller's
+     * "if (lock() != WW_OK)" never detected a timeout. Return WW_ERR. */
+    return WW_ERR;
 }
 
 void log_mutex_lock_wait(void)

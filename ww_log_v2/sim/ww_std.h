@@ -51,19 +51,7 @@ static inline int ww_vsnprintf(char *buf, int size, const char *linesep,
 #define ww_memcpy(dst, src, len)    memcpy((dst), (src), (len))
 #define ww_memcmp(a, b, len)        memcmp((a), (b), (len))
 
-/* ======================================================================
- * Utility return-code macros
- * These match the naming used in n_ww_logoutput.c but are NOT defined in
- * n_ww_log_control.h.  Bug: the firmware must define them in its own
- * ww_std.h; we provide them here for the sim.
- * ====================================================================== */
-
-/** Return from a void function if expr is true; rc is unused (compat signature). */
-#define N_RETURN_IF_TRUE_WO_PRINT(expr, rc) \
-    do { if (expr) { (void)(rc); return; } } while (0)
-
-/** Return rc from a non-void function if expr is true; no log print. */
-#define N_RETURN_CODE_IF_TRUE_WO_PRINT(expr, rc) \
-    do { if (expr) { return (rc); } } while (0)
+/* Note: N_RETURN_*_WO_PRINT macros are provided by n_ww_log_control.h
+ * (the firmware header), so the sim does not redefine them here. */
 
 #endif /* __WW_STD_H__ */

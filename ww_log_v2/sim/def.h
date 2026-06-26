@@ -47,14 +47,6 @@ typedef int WW_BOOL;
 #define WW_DISABLE    0
 
 /* ======================================================================
- * WM_ return-code / bool type system
- * TODO: VERIFY whether WM_* and WW_* are truly the same or separate enums.
- * Currently aliased as identical for the sim; adjust if they differ.
- * ====================================================================== */
-typedef int WW_RTN;
-typedef int WW_BOOL;
-
-/* ======================================================================
  * Null / common constants
  * ====================================================================== */
 #ifndef NULL

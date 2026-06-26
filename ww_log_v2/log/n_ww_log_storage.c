@@ -180,19 +180,31 @@ void log_ram_init(bool force_clear)
 
     if (force_clear == WW_DISABLE)
     {
+        /* Hot restart: header must pass AND the entry chain must be structurally
+         * intact, otherwise we cannot trust the data region. */
         rtn = validate_header(g_ram_buffer.header);
+        if (rtn == WW_OK && log_ram_validate_data() != WW_OK)
+        {
+            /* Header looks fine but the data chain is broken: keep the buffer
+             * (for forensic inspection) but flag it so the host knows. */
+            g_ram_buffer.header->flags |= LOG_FLAG_CORRUPTED;
+            g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
+            rtn = WW_ERR;
+        }
     }
 
-    // if (rtn)
-    // {
-    // }
     if (rtn != WW_OK || force_clear == WW_ENABLE)
     {
         init_header(g_ram_buffer.header);
         ww_memset(g_ram_buffer.data, 0, g_ram_buffer.data_size);
     }
-    ww_printf("[LOG][RAM]: Initialized (force_clear=%u)\n", force_clear); // Todo: set as comment
 
+    /* log_count is a per-boot counter (entries logged since this start). Reset it
+     * on every init, including hot restart where the buffer contents are kept. */
+    g_ram_buffer.header->log_count = 0;
+    g_ram_buffer.header->checksum  = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
+
+    ww_printf("[LOG][RAM]: Initialized (force_clear=%u)\n", force_clear);
 }
 
 void log_ram_get_header_info(LOG_RAM_HEADER_T *info)
@@ -219,94 +231,150 @@ U32 log_calc_checksum(const void *data, U32 len)
     return sum;
 }
 
+/**
+ * @brief Drop the single oldest whole entry at read_index (FIFO eviction).
+ *        Parses the entry's param_count from its header to know its length,
+ *        advances read_index past it (word-aligned wrap), and flags overflow.
+ * @note  Caller must hold the lock. Assumes read_index points at a valid entry
+ *        start, which the ring invariant guarantees.
+ */
+static void log_ram_drop_oldest(LOG_RAM_HEADER_T *header)
+{
+    U32 old_hdr  = *(U32 *)(g_ram_buffer.data + header->read_index);
+    U8  old_pcnt = (U8)N_WW_LOG_PCNT_OF(old_hdr);
+    U16 old_size = 4 + (U16)old_pcnt * 4;
+    U16 ri = header->read_index;
+    U16 b;
+
+    for (b = 0; b < old_size; b += 4)
+    {
+        ri = log_ram_get_next_index(ri);
+    }
+    header->read_index = ri;
+
+    if (header->overflow_count < 0xFFFF)
+    {
+        header->overflow_count++;
+    }
+    header->flags |= LOG_FLAG_OVERFLOW;
+
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
+    if (header->pending_len >= old_size)
+    {
+        header->pending_len -= old_size;
+    }
+    else
+    {
+        header->pending_len = 0;
+    }
+#endif
+}
+
 WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count)
 {
     LOG_RAM_HEADER_T *header = g_ram_buffer.header;
+    U16 write_idx;
+    U16 required = 4 + (U16)param_count * 4; /* encoded header + N params */
+    U8  i;
+
+    /* An entry larger than the whole ring can never fit -> discard up front
+     * (would otherwise loop forever evicting). */
+    if (required > g_ram_buffer.data_size - 1)
+    {
+        return WW_OK;
+    }
 
     if (log_mutex_lock() != WW_OK)
     {
         return LOG_EXT_ERR_MUTEX_FAIL;
     }
 
-    U16 write_idx = header->write_index;
-    U16 required = 4 + param_count * 4; /* 4 bytes for encoded + 4*N for params */
-    U16 available = log_ram_get_available(); /* Check if have enough space (considering wrap-around) */
-
-#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
-    if (log_ram_is_need_flush() == WW_TRUE)
+    /* Make room by evicting whole oldest entries until 'required' fits.
+     * Whole-entry eviction keeps read_index on an entry boundary so the ring
+     * never desyncs, and sets LOG_FLAG_OVERFLOW so the host knows data was lost.
+     * (When the ring is empty available == data_size-1 >= required, so this
+     * loop never runs and cannot spin.) */
+    while (log_ram_get_available() < required)
     {
-        log_flush_notify();
-    }
-#endif
-
-    if (required > available)
-    {
-        if (required > g_ram_buffer.data_size)
-        {
-            // ww_printf("[LOG][EXT]: Single log too large (%u bytes), discarded\n", required);
-            log_mutex_unlock();
-            return WW_OK;
-        }
-
-#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
-        if (log_ext_mem_is_full() == WW_TRUE)
-        {
-            log_flush_notify();
-        }
-#endif
-
-        U16 wrap_bytes = required - available;
-
-        write_idx = 0;
-
-        if (header->read_index < wrap_bytes)
-        {
-            U32 lost_bytes = header->read_index;
-            header->read_index = wrap_bytes;
-
-
-#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
-            if (header->pending_len >= lost_bytes)
-            {
-                header->pending_len -= lost_bytes;
-            }
-            else
-            {
-                header->pending_len = 0;
-            }
-#endif
-
-            ww_printf("[LOG][RAM]: Buffer wrap, lost %u bytes of old data\n", lost_bytes);
-        }
+        log_ram_drop_oldest(header);
     }
 
-    /* Write encoded LOG entry */
-    // ww_printf("Log Base Addr : %p\n", (void*)DLM_MAINTAIN_LOG_BASE_ADDR);
-    // ww_printf("Data Start Addr: %p\n", (void*)g_ram_buffer.data);
-
+    /* Write the entry word-by-word. data_size is a multiple of 4 and indices
+     * step by 4, so no single U32 is ever split across the wrap boundary; an
+     * entry may still wrap at WORD granularity, which the decoder reassembles
+     * via the read/write pointers + overflow flag. */
+    write_idx = header->write_index;
     *(U32 *)(g_ram_buffer.data + write_idx) = encoded;
     write_idx = log_ram_get_next_index(write_idx);
-    header->log_count += 1;
 
-    /* Write parameters */
-    for (U8 i = 0; i < param_count; i++)
+    for (i = 0; i < param_count; i++)
     {
         *(U32 *)(g_ram_buffer.data + write_idx) = params[i];
         write_idx = log_ram_get_next_index(write_idx);
     }
 
     header->write_index = write_idx;
+    header->log_count  += 1;
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
     header->pending_len += required;
+    if (log_ram_is_need_flush() == WW_TRUE)
+    {
+        log_flush_notify();
+    }
 #endif
 
-    /* Update checksum */
     header->checksum = LOG_CALC_STRUCT_CHECKSUM(header);
 
     log_mutex_unlock();
-
     return WW_OK;
+}
+
+/**
+ * @brief Mark that an ERR-level entry was recorded this boot (LOG_FLAG_ERROR).
+ *        level is not encoded into entries, so the emit layer calls this for
+ *        ERR logs to give the host a cheap "did anything bad happen" signal.
+ */
+void log_ram_mark_error(void)
+{
+    g_ram_buffer.header->flags |= LOG_FLAG_ERROR;
+    g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
+}
+
+/**
+ * @brief Structural integrity check of the data area (not just the header).
+ *        Walks every entry from read_index to write_index; if any entry's
+ *        param_count would run the walk past write_index the data is corrupt.
+ * @return WW_OK if the entry chain lands exactly on write_index, else WW_ERR.
+ * @note  Cheap O(entries) walk, no stored CRC. On failure the caller sets
+ *        LOG_FLAG_CORRUPTED so the host knows recovery was partial.
+ */
+WW_RTN log_ram_validate_data(void)
+{
+    LOG_RAM_HEADER_T *header = g_ram_buffer.header;
+    U16 idx   = header->read_index;
+    U16 used  = get_current_usage();
+    U16 walked = 0;
+
+    while (walked < used)
+    {
+        U32 hdr  = *(U32 *)(g_ram_buffer.data + idx);
+        U8  pcnt = (U8)N_WW_LOG_PCNT_OF(hdr);
+        U16 size = 4 + (U16)pcnt * 4;
+        U16 b;
+
+        if (walked + size > used)
+        {
+            return WW_ERR;   /* entry runs past the written region -> corrupt */
+        }
+        for (b = 0; b < size; b += 4)
+        {
+            idx = log_ram_get_next_index(idx);
+        }
+        walked += size;
+    }
+
+    return (idx == header->write_index) ? WW_OK : WW_ERR;
 }
 
 void log_ram_dump_hex(void)

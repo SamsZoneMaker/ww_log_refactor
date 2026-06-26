@@ -41,8 +41,37 @@ extern "C"
     log_calc_checksum((ptr), sizeof(*(ptr)) - sizeof(U32))
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
-#define LOG_EXTMEM_MAGIC          (0x474F4C46)
+
+/* ===================== External-storage container geometry =====================
+ *
+ * The LOG partition is laid out as a ring of fixed-size, self-describing blocks
+ * plus a fixed control footer in the last slot:
+ *
+ *   [0 .. log_size-FOOTER) : N block slots, slot = LOGH header(32B) + payload
+ *                            N = (log_size - FOOTER) / LOG_EXT_BLOCK_SIZE
+ *   [log_size-FOOTER .. end): 32B footer = ring control (oldest/newest block,
+ *                             write slot, wrap count, checksum). Fixed location
+ *                             so the host always knows where to find it.
+ *
+ * Each flush packs WHOLE entries (never split mid-entry) up to PAYLOAD bytes
+ * into one block, stamps a payload CRC, and writes it to the current ring slot.
+ * On wrap the oldest slot is overwritten (RING) or flushing stops (FREEZE).
+ */
+#define LOG_EXTMEM_MAGIC          (0x474F4C46)   /* 'FLOG' - footer (ring control) */
+#define LOG_BLOCK_MAGIC           (0x4C4F4748)   /* 'LOGH' - per-block header       */
+
+#define LOG_EXT_BLOCK_SIZE        (1024)                       /* one ring slot   */
+#define LOG_EXT_BLOCK_HEADER_SIZE (sizeof(LOG_BLOCK_HEADER_T)) /* 32 bytes        */
+#define LOG_EXT_FOOTER_SIZE       (sizeof(LOG_EXT_FOOTER_T))   /* 32 bytes        */
+#define LOG_EXT_PAYLOAD_SIZE      (LOG_EXT_BLOCK_SIZE - LOG_EXT_BLOCK_HEADER_SIZE)
+
+/* Ext-full policy: RING overwrites the oldest block; FREEZE stops flushing.
+ * Exactly one must be defined (default RING, set in autoconf.h). */
+#if !defined(CONFIG_N_LOG_EXT_POLICY_RING) && !defined(CONFIG_N_LOG_EXT_POLICY_FREEZE)
+#define CONFIG_N_LOG_EXT_POLICY_RING
 #endif
+
+#endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 
 /*************************** macro definition end *****************************/
 
@@ -108,7 +137,25 @@ typedef enum
     EXT_MEM_FLASH = 2,
 } EXT_MEM_TYPE_E;
 
-/* Log context in external storage */
+/**
+ * Per-block header ('LOGH'), prepended to every flushed block (32 bytes).
+ * Lets the host walk blocks independently and validate each payload by CRC,
+ * so a torn/partial flush damages at most one block instead of desyncing the
+ * whole partition.
+ */
+typedef struct
+{
+    U32 magic;         /*==< LOG_BLOCK_MAGIC 'LOGH'                         */
+    U32 seq;           /*==< Monotonic block sequence (ordering after wrap) */
+    U32 timestamp;     /*==< ww_cycle_get_32() at flush time                */
+    U16 data_size;     /*==< Valid payload bytes in this block (<= PAYLOAD)  */
+    U16 entry_count;   /*==< Number of whole entries packed in this block   */
+    U32 crc;           /*==< CRC/checksum over the first data_size payload  */
+    U32 reserved1;     /*==< */
+    U32 reserved2;     /*==< */
+} LOG_BLOCK_HEADER_T;  /*==< Total: 32 bytes */
+
+/* Log context in external storage (RAM-resident runtime state, not persisted) */
 typedef struct
 {
     U8  initialized;
@@ -117,20 +164,29 @@ typedef struct
     U8  reserved;
     U32 log_offset;
     U32 log_size;
-    U32 ext_write_offset;
+    U32 ext_write_offset;  /*==< byte offset of the current write slot       */
+    U16 block_count;       /*==< number of ring slots = (log_size-32)/1024   */
+    U16 write_slot;        /*==< index of the slot to write next (0..N-1)    */
+    U32 next_seq;          /*==< sequence number for the next block          */
+    U32 wrap_count;        /*==< how many times the ring has wrapped         */
 } LOG_EXT_CTX_T;
 
+/**
+ * Footer ('FLOG') = ring control block, written at the fixed tail slot
+ * [log_size-32, log_size) every flush. The host reads it first to learn which
+ * block is oldest/newest and how to reorder the ring (32 bytes).
+ */
 typedef struct
 {
-    U32 magic;
-    U16 mem_type;
-    U16 full_tags;
-    U32 init_timestamp;
-    U32 last_flush_timestamp;
-    U32 log_count;
-    U32 reserved1;
-    U32 reserved2;
-    U32 checksum;
+    U32 magic;                 /*==< LOG_EXTMEM_MAGIC 'FLOG'                 */
+    U16 mem_type;              /*==< EXT_MEM_EEPROM / EXT_MEM_FLASH          */
+    U16 write_slot;            /*==< next slot to write (newest = this-1)    */
+    U32 wrap_count;            /*==< ring wrap count (0 = not yet wrapped)   */
+    U32 next_seq;              /*==< next block sequence number              */
+    U32 log_count;             /*==< entries persisted this boot             */
+    U32 last_flush_timestamp;  /*==< */
+    U32 reserved;              /*==< */
+    U32 checksum;              /*==< sum of the first 28 bytes               */
 } LOG_EXT_FOOTER_T;       /*==< Total: 32 bytes */
 
 /*************************** type definition end *****************************/
@@ -142,6 +198,8 @@ void log_ram_init(bool force_clear);
 void log_ram_get_header_info(LOG_RAM_HEADER_T *info);
 U32  log_calc_checksum(const void *data, U32 len);
 WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count);
+void log_ram_mark_error(void);
+WW_RTN log_ram_validate_data(void);
 void log_ram_dump_hex(void);
 void log_ram_index_reset(void);
 

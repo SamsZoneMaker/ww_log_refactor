@@ -104,10 +104,12 @@ void n_ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...
         va_end(args);
     }
 
-    /* level is intentionally NOT encoded (see CLAUDE.md §2) */
+    /* level is intentionally NOT encoded (see CLAUDE.md §2); it is passed to the
+     * backend dispatch so the RAM/storage backend can apply the storage-persist
+     * threshold and the ERR flag (level cannot be recovered from the bytes). */
     encoded = N_WW_LOG_ENCODE(file_id, line, param_count);
 
-    ww_log_backend_emit(encoded, params, param_count);
+    ww_log_backend_emit(encoded, params, param_count, level);
 }
 
 #endif /* CONFIG_N_LOG_MODE_ENCODE */
@@ -135,26 +137,36 @@ static void backend_uart_emit(U32 encoded, const U32 *params, U8 param_count)
 #endif
 
 #if (CONFIG_N_LOG_BACKEND_RAM == 1)
-// extern WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count);
-
-static void backend_ram_emit(U32 encoded, const U32 *params, U8 param_count)
+static void backend_ram_emit(U32 encoded, const U32 *params, U8 param_count, U8 level)
 {
-    U32 ret = log_ram_write(encoded, (U32 *)params, param_count);
+    /* Storage-persist filter: entries above the threshold (default: DBG) are not
+     * written to RAM / external storage. level is not encoded, so it must be
+     * filtered here at emit time -> RAM content == storage content. */
+    if (level > N_WW_LOG_STORAGE_THRESHOLD)
+    {
+        return;
+    }
 
-    (void)ret;
+    (void)log_ram_write(encoded, (U32 *)params, param_count);
+
+    /* Cheap "did anything bad happen this boot" signal for the host. */
+    if (level == N_WW_LOG_LEVEL_ERR)
+    {
+        log_ram_mark_error();
+    }
 }
 #endif
 
-void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count)
+void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count, U8 level)
 {
 #if (CONFIG_N_LOG_BACKEND_UART == 1)
+    /* UART gets every entry that passed the runtime level/module filter,
+     * regardless of the storage-persist threshold. */
     backend_uart_emit(encoded, params, param_count);
 #endif
 #if (CONFIG_N_LOG_BACKEND_RAM == 1)
-    backend_ram_emit(encoded, params, param_count);
+    backend_ram_emit(encoded, params, param_count, level);
 #endif
 
-#if (CONFIG_N_LOG_BACKEND_UART == 0) && (CONFIG_N_LOG_BACKEND_RAM == 0)
-    (void)encoded; (void)params; (void)param_count;
-#endif
+    (void)encoded; (void)params; (void)param_count; (void)level;
 }

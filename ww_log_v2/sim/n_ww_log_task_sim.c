@@ -21,6 +21,11 @@
 /* Mutex — no-op in single-threaded sim                                    */
 /* ====================================================================== */
 
+WW_RTN log_lock_init(void)
+{
+    return WW_OK;   /* single-threaded sim: no real mutex */
+}
+
 WW_RTN log_mutex_lock(void)
 {
     return WW_OK;
