@@ -6,27 +6,10 @@
  * the same way the on-target Kconfig build injects these CONFIG_* symbols.
  * Select the log mode by uncommenting exactly ONE of the three mode defines.
  * Backend enables can be toggled independently.
- *
- * The level constants (N_WW_LOG_LEVEL_*) are also defined here to work around a
- * circular-include ordering issue in n_ww_log_control.h vs n_ww_log_output.h.
  */
 
 #ifndef __AUTOCONF_H__
 #define __AUTOCONF_H__
-
-/* ======================================================================
- * Log level constants (also in n_ww_log_control.h; see note above)
- * ====================================================================== */
-#ifndef N_WW_LOG_LEVEL_ERR
-#define N_WW_LOG_LEVEL_ERR    0
-#define N_WW_LOG_LEVEL_WRN    1
-#define N_WW_LOG_LEVEL_INF    2
-#define N_WW_LOG_LEVEL_DBG    3
-#endif
-
-#ifndef N_WW_LOG_COMPILE_THRESHOLD
-#define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_DBG
-#endif
 
 /* ======================================================================
  * Log mode — uncomment exactly ONE

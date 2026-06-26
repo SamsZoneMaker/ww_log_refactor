@@ -6,7 +6,7 @@
 // #include ""
 #include "ww_std.h"
 #include "log/n_ww_log_storage.h"
-#include "log/n_ww_log_control.h"
+#include "log/n_ww_log_macro.h"    /* N_RETURN_*_IF_TRUE + (via def) encode accessors */
 #include "log/n_ww_log_task.h"
 
 #include "init_ex.h"

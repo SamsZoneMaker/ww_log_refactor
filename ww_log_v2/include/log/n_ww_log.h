@@ -15,24 +15,22 @@ extern "C"
 //#include <>
 //#include ""
 #include "autoconf.h"
-#include "n_ww_log_control.h"
 
-
-/*************************** macro definition start ***************************/
-
-#if defined(CONFIG_N_LOG_MODE_STRING) || defined(CONFIG_N_LOG_MODE_ENCODE)
+/* Single public entry point for the v2 log module. Including this header (e.g.
+ * from ww_std.h) brings in the whole layered set:
+ *   def   - levels / thresholds / encode bit-field / CURRENT_* (no deps)
+ *   api   - runtime control (init, level threshold, module mask)
+ *   output- output backend function declarations
+ *   macro - N_LOG_* call macros + N_*_IF_TRUE helpers (no-ops in DISABLED mode)
+ * The layering is acyclic: def <- output <- macro, def <- api. */
+#include "n_ww_log_def.h"
+#include "n_ww_log_api.h"
 #include "n_ww_log_output.h"
-#endif
+#include "n_ww_log_macro.h"
 
 #if defined(CONFIG_N_LOG_MODE_ENCODE) && defined(CONFIG_N_LOG_BACKEND_RAM)
 #include "n_ww_log_storage.h"
 #endif
-
-/* In DISABLED mode the N_LOG_* macros expand to no-ops; they are defined in
- * n_ww_log_output.h (pulled in via n_ww_log_control.h) so every TU that uses the
- * logging/return-code macros sees them, with or without including this header. */
-
-/*************************** macro definition end *****************************/
 
 
 /*************************** type definition start ***************************/

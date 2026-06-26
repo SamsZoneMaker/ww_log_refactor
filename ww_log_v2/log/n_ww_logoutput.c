@@ -4,10 +4,8 @@
  */
 
 #include "ww_std.h"
-#include "log/n_ww_log_output.h"
-
-// Optional: because n_ww_log_control.h is included by n_ww_log_output.h
-// #include "log/n_ww_log_control.h"
+#include "log/n_ww_log_macro.h"   /* N_LOG and N_RETURN macros, pulls def + output */
+#include "log/n_ww_log_api.h"     /* g_ww_log_module_mask / g_ww_log_level_threshold */
 
 #if (CONFIG_N_LOG_BACKEND_RAM == 1) || (CONFIG_N_LOG_BACKEND_EXT_MEM == 1)
 #include "log/n_ww_log_storage.h"

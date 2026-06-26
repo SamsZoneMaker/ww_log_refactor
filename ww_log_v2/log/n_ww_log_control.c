@@ -7,9 +7,9 @@
 // #include <>
 // #include ""
 #include "ww_std.h"
-#include "log/n_ww_log.h"
-#include "log/n_ww_log_control.h"
-#include "log/n_ww_log_storage.h"
+#include "log/n_ww_log_api.h"       /* this module implements the control API */
+#include "log/n_ww_log_storage.h"   /* log_ram_init (RAM backend) */
+#include "log/n_ww_log_task.h"      /* log_lock_init / log_flush_task_init */
 
 /*************************** global variable start ***************************/
 /* to be used in all files */

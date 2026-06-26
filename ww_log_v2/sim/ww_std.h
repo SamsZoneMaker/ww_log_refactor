@@ -54,4 +54,17 @@ static inline int ww_vsnprintf(char *buf, int size, const char *linesep,
 /* Note: N_RETURN_*_WO_PRINT macros are provided by n_ww_log_control.h
  * (the firmware header), so the sim does not redefine them here. */
 
+/* ======================================================================
+ * Logging
+ * ----------------------------------------------------------------------
+ * Pull the v2 log module in here so that any file that includes ww_std.h gets
+ * the full N_LOG_* API with no extra include -- this is how the firmware is
+ * meant to consume it. During the migration the OLD log system stays exposed
+ * alongside the new one (different prefixes: legacy LOG_* vs new N_LOG_*), so
+ * call sites can adopt N_LOG_* incrementally. The old log's header would be
+ * included right here next to it.
+ * ====================================================================== */
+#include "log/n_ww_log.h"
+/* #include "log/old_log.h"   <- legacy log system, kept during migration */
+
 #endif /* __WW_STD_H__ */
