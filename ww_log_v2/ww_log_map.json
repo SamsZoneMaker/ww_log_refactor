@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "version": "",
+    "build_time": "2026-06-25T09:30:10Z",
+    "encoding": "file12_line14_pcnt6"
+  },
+  "modules": {
+    "1": {
+      "name": "DEMO",
+      "enable": true
+    },
+    "2": {
+      "name": "TEST",
+      "enable": false
+    },
+    "4": {
+      "name": "DRIVERS",
+      "enable": true
+    }
+  },
+  "files": {
+    "128": {
+      "path": "src/demo/demo_init.c",
+      "module": "DEMO",
+      "present": true
+    },
+    "129": {
+      "path": "src/demo/demo_process.c",
+      "module": "DEMO",
+      "present": true
+    },
+    "512": {
+      "path": "src/drivers/drv_uart.c",
+      "module": "DRIVERS",
+      "present": true
+    }
+  },
+  "entries": [
+    {
+      "file_id": 128,
+      "line": 13,
+      "level": "INF",
+      "fmt": "Demo module initializing..."
+    },
+    {
+      "file_id": 128,
+      "line": 14,
+      "level": "DBG",
+      "fmt": "Hardware setup started"
+    },
+    {
+      "file_id": 128,
+      "line": 15,
+      "level": "INF",
+      "fmt": "Hardware check passed, code=%d"
+    },
+    {
+      "file_id": 128,
+      "line": 16,
+      "level": "WRN",
+      "fmt": "Demo init warning, val=%d"
+    },
+    {
+      "file_id": 129,
+      "line": 13,
+      "level": "ERR",
+      "fmt": "demo_process: invalid task_id=%d"
+    },
+    {
+      "file_id": 129,
+      "line": 17,
+      "level": "INF",
+      "fmt": "demo_process: start, task_id=%d"
+    },
+    {
+      "file_id": 129,
+      "line": 18,
+      "level": "DBG",
+      "fmt": "demo_process: inner loop x=%d y=%d"
+    },
+    {
+      "file_id": 129,
+      "line": 19,
+      "level": "INF",
+      "fmt": "demo_process: done, task_id=%d"
+    },
+    {
+      "file_id": 512,
+      "line": 11,
+      "level": "INF",
+      "fmt": "UART driver init"
+    },
+    {
+      "file_id": 512,
+      "line": 12,
+      "level": "DBG",
+      "fmt": "UART baud=115200"
+    },
+    {
+      "file_id": 512,
+      "line": 19,
+      "level": "WRN",
+      "fmt": "UART send: length=%d exceeds limit"
+    },
+    {
+      "file_id": 512,
+      "line": 21,
+      "level": "INF",
+      "fmt": "UART send: length=%d"
+    }
+  ]
+}

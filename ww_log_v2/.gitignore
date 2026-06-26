@@ -1,0 +1,13 @@
+# Build artifacts
+output/
+
+# Host-side simulated storage
+sim_data/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Local dumps
+*.bin
+*.hex
