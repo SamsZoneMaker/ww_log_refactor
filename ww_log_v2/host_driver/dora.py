@@ -1684,7 +1684,8 @@ class DORA:
             v_addr   - 必选   RAM 区内存地址(__dlm_log_start 的值)
             v_length - 可选   读取字节数, 默认 4096(一个 maintain region)
             v_raw    - 可选   每行后附带原始帧
-            v_output - 可选   同时把原始 dump 存到该文件
+            v_output - 可选   保存到文件; 后缀决定内容:
+                              .dump/.bin -> 原始 log 字节(不解析); .txt/其它 -> 解析后的可读行
         '''
         log = self.__board_log_get(v_map, v_boardId)
         return log.f_decode_ram(v_addr, v_length, v_raw, v_output)
@@ -1699,7 +1700,8 @@ class DORA:
             v_offset - 可选   flash 内偏移, 默认 0x0
             v_length - 可选   读取字节数, 默认 4096
             v_raw    - 可选   每行后附带原始帧
-            v_output - 可选   同时把原始 dump 存到该文件
+            v_output - 可选   保存到文件; 后缀决定内容:
+                              .dump/.bin -> 原始 log 字节(不解析); .txt/其它 -> 解析后的可读行
         '''
         log = self.__board_log_get(v_map, v_boardId)
         return log.f_decode_flash(v_offset, v_length, v_raw, v_output)

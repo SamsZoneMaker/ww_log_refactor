@@ -34,8 +34,14 @@ level is NOT encoded; it is restored from the map by (file_id, line).
 """
 
 import json
+import os
 import re
 import struct
+
+# Memory-mapped flash window base (see flash_operation.FLASH_MMAP_BASE): the SPI
+# NOR is mapped here, so the LOG partition can be read fast over JTAG/SBA word
+# reads instead of slow per-page SPI READ commands.
+FLASH_MMAP_BASE = 0x80000000
 
 
 # ----------------------------------------------------------------------------
@@ -287,6 +293,20 @@ def parse_binary(data, notes):
     return parse_block_ring(data, notes)
 
 
+def _save_output(path, raw_bytes, decoded_lines):
+    """Save either the raw log bytes or the decoded text, picked by extension:
+    .dump/.bin -> raw bytes; .txt or anything else -> decoded text."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in ('.dump', '.bin'):
+        with open(path, 'wb') as f:
+            f.write(raw_bytes)
+        print(f"Saved raw log bytes ({len(raw_bytes)}) -> {path}")
+    else:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(decoded_lines) + ('\n' if decoded_lines else ''))
+        print(f"Saved {len(decoded_lines)} decoded lines -> {path}")
+
+
 # ----------------------------------------------------------------------------
 # Log: device read + decode, mirroring api/flash_operation.Flash
 # ----------------------------------------------------------------------------
@@ -320,8 +340,13 @@ class Log:
         return bytes(byte_list)
 
     def _read_flash(self, offset, length):
-        return self.dora.f_flash_read(offset, length,
-                                      v_print=False, v_boardId=self.boardId)
+        """Fast flash read via the memory-mapped window (JTAG/SBA word reads),
+        rather than SPI page reads. Mirrors flash_operation._verify_mmap."""
+        words = (length + 3) // 4
+        _addrs, vals = self.dora.f_csr_word_rd(FLASH_MMAP_BASE + offset, words,
+                                               v_boardId=self.boardId)
+        blob = b''.join(struct.pack('<I', v & 0xFFFFFFFF) for v in vals)
+        return blob[:length]
 
     def _read_eeprom(self, offset, length, devAddr):
         return self.dora.f_eeprom_read(offset, length, v_print=False,
@@ -330,23 +355,30 @@ class Log:
     # --- decode + emit -----------------------------------------------------
 
     def _decode_blob(self, data, raw, output):
-        """Auto-frame `data`, print decoded lines, return the frame list."""
-        if output:
-            with open(output, 'wb') as f:
-                f.write(data)
-            print(f"Saved raw dump ({len(data)} bytes) to {output}")
+        """Auto-frame `data`, print decoded lines, optionally save, return frames.
 
+        `output` extension decides what is saved:
+          .dump/.bin -> the raw log bytes read off the device (no decode)
+          .txt/other -> the decoded human-readable lines
+        (no extension defaults to .txt / decoded)
+        """
         notes = []
         frames = parse_binary(data, notes)
         for note in notes:
             print(note)
+
+        decoded_lines = []
         for header, params in frames:
             line = format_frame(header, params, self.index)
             if raw:
                 line += ("    | 0x%08X " % header) + \
                         ' '.join('0x%08X' % p for p in params[:header & 0x3F])
+            decoded_lines.append(line)
             print(line)
         print("# decoded %d log entries" % len(frames))
+
+        if output:
+            _save_output(output, data, decoded_lines)
         return frames
 
     # --- public ------------------------------------------------------------

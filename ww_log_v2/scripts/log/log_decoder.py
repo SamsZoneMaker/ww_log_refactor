@@ -337,6 +337,11 @@ def main():
                     help='input format (default: auto-detect)')
     ap.add_argument('--raw', action='store_true',
                     help='append the raw frame after each decoded line')
+    ap.add_argument('-o', '--output', metavar='PATH',
+                    help='save to a file. Extension decides what is written:\n'
+                         "  .dump/.bin -> the raw log bytes (no decode)\n"
+                         '  .txt/other -> the decoded human-readable lines\n'
+                         '(no extension defaults to .txt / decoded)')
     args = ap.parse_args()
 
     if not args.hex_str and not args.input:
@@ -369,15 +374,38 @@ def main():
 
     for note in notes:
         print(note)
+
+    decoded_lines = []
     for header, params in frames:
         line = format_frame(header, params, idx)
         if args.raw:
             line += ("    | 0x%08X " % header) + \
                     ' '.join('0x%08X' % p for p in params[:header & 0x3F])
+        decoded_lines.append(line)
         print(line)
+
+    if args.output:
+        save_output(args.output, data, decoded_lines)
 
     print("# format=%s, decoded %d log entries" % (fmt, len(frames)),
           file=sys.stderr)
+
+
+def save_output(path, raw_bytes, decoded_lines):
+    """Save either the raw log bytes or the decoded text, picked by extension:
+    .dump/.bin -> raw bytes; .txt or anything else -> decoded text."""
+    import os
+    ext = os.path.splitext(path)[1].lower()
+    if ext in ('.dump', '.bin'):
+        with open(path, 'wb') as f:
+            f.write(raw_bytes)
+        print("# saved raw log bytes (%d) -> %s" % (len(raw_bytes), path),
+              file=sys.stderr)
+    else:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(decoded_lines) + ('\n' if decoded_lines else ''))
+        print("# saved %d decoded lines -> %s" % (len(decoded_lines), path),
+              file=sys.stderr)
 
 
 if __name__ == '__main__':

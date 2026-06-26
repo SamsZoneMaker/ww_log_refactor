@@ -104,7 +104,9 @@ def _add_common(p):
     p.add_argument('--raw', action='store_true',
                    help='Append the raw frame after each decoded line')
     p.add_argument('-o', '--output', default=None,
-                   help='Also save the raw device dump to this binary file')
+                   help='Save to a file; extension decides what is written: '
+                        '.dump/.bin -> raw log bytes (no decode), '
+                        '.txt/other -> decoded lines (default .txt)')
 
 
 def build_parser():
