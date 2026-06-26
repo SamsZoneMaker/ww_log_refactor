@@ -1,7 +1,7 @@
 {
   "modules": {
     "DEMO":    { "id": 1, "dirs": ["src/demo"],               "enable": true },
-    "TEST":    { "id": 2, "dirs": ["src/test"],               "enable": false },
+    "TEST":    { "id": 2, "dirs": ["src/test"],               "enable": true },
     "DRIVERS": { "id": 4, "dirs": ["src/drivers", "src/hal"], "enable": true }
   },
   "unregistered": "warn"

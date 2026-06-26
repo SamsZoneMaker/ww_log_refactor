@@ -32,7 +32,8 @@ INCLUDES = \
     -Iinclude \
     -I$(OUT_DIR) \
     -Isrc/demo \
-    -Isrc/drivers
+    -Isrc/drivers \
+    -Isrc/test
 
 # Force-include autoconf.h on every TU, the way the Kconfig build does on target
 # (CONFIG_N_LOG_MODE_* / CONFIG_N_LOG_BACKEND_* come from there). This lets the
@@ -62,7 +63,7 @@ SIM_IMPL_SRCS = \
     sim/sim_ext_storage.c
 
 # Registered source dirs (scanned by gen_log_map.py)
-LOG_SRCS = $(wildcard src/demo/*.c src/drivers/*.c)
+LOG_SRCS = $(wildcard src/demo/*.c src/drivers/*.c src/test/*.c)
 
 ALL_SRCS = $(LOG_MODULE_SRCS) $(SIM_IMPL_SRCS) $(LOG_SRCS) examples/main.c
 

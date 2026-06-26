@@ -583,6 +583,21 @@ U8* log_ram_get_data_ptr(void)
     return g_ram_buffer.data;
 }
 
+U32 log_ram_get_log_count(void)
+{
+    return g_ram_buffer.header->log_count;
+}
+
+U16 log_ram_get_overflow_count(void)
+{
+    return g_ram_buffer.header->overflow_count;
+}
+
+U16 log_ram_get_flags(void)
+{
+    return g_ram_buffer.header->flags;
+}
+
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 

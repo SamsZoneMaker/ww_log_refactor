@@ -1,7 +1,7 @@
 {
   "meta": {
     "version": "",
-    "build_time": "2026-06-26T17:17:28Z",
+    "build_time": "2026-06-26T17:24:28Z",
     "encoding": "file12_line14_pcnt6"
   },
   "modules": {
@@ -11,7 +11,7 @@
     },
     "2": {
       "name": "TEST",
-      "enable": false
+      "enable": true
     },
     "4": {
       "name": "DRIVERS",
@@ -27,6 +27,11 @@
     "129": {
       "path": "src/demo/demo_process.c",
       "module": "DEMO",
+      "present": true
+    },
+    "256": {
+      "path": "src/test/test_log.c",
+      "module": "TEST",
       "present": true
     },
     "512": {
@@ -89,6 +94,66 @@
       "line": 30,
       "level": "INF",
       "fmt": "demo_process: done, task_id=%d"
+    },
+    {
+      "file_id": 256,
+      "line": 149,
+      "level": "ERR",
+      "fmt": "selftest err %d"
+    },
+    {
+      "file_id": 256,
+      "line": 150,
+      "level": "WRN",
+      "fmt": "selftest wrn %d"
+    },
+    {
+      "file_id": 256,
+      "line": 151,
+      "level": "INF",
+      "fmt": "selftest inf %d"
+    },
+    {
+      "file_id": 256,
+      "line": 152,
+      "level": "DBG",
+      "fmt": "selftest dbg %d"
+    },
+    {
+      "file_id": 256,
+      "line": 164,
+      "level": "INF",
+      "fmt": "masked %d"
+    },
+    {
+      "file_id": 256,
+      "line": 167,
+      "level": "INF",
+      "fmt": "unmasked %d"
+    },
+    {
+      "file_id": 256,
+      "line": 177,
+      "level": "INF",
+      "fmt": "inf %d"
+    },
+    {
+      "file_id": 256,
+      "line": 178,
+      "level": "WRN",
+      "fmt": "wrn %d"
+    },
+    {
+      "file_id": 256,
+      "line": 179,
+      "level": "DBG",
+      "fmt": "dbg %d"
+    },
+    {
+      "file_id": 256,
+      "line": 181,
+      "level": "ERR",
+      "fmt": "err %d"
     },
     {
       "file_id": 512,

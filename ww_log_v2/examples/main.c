@@ -32,6 +32,9 @@ extern void demo_burst(int n);
 extern void drv_uart_init(void);
 extern void drv_uart_send(int length);
 
+/* Self-test suite (TEST module) */
+extern int test_log_run_all(void);
+
 static void banner(const char *title)
 {
     printf("\n========================================\n");
@@ -67,6 +70,13 @@ int main(void)
 
     /* ===== Init log system ===== */
     n_ww_log_init();
+
+    /* ===== Self-test suite ===== */
+    banner("Self-test suite");
+    {
+        int failed = test_log_run_all();
+        printf("\n[main] self-test reported %d failure(s)\n", failed);
+    }
 
     /* ===== Normal logging through registered modules ===== */
     banner("DEMO module");

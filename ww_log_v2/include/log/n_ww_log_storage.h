@@ -212,6 +212,9 @@ U16  log_ram_get_write_index(void);
 U16  log_ram_get_read_index(void);
 U16  log_ram_get_pending_len(void);
 U8* log_ram_get_data_ptr(void);
+U32  log_ram_get_log_count(void);
+U16  log_ram_get_overflow_count(void);
+U16  log_ram_get_flags(void);
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
