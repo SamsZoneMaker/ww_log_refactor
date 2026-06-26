@@ -461,8 +461,8 @@ void log_ram_dump_hex(void)
         ww_printf("\n");
     }
     ww_printf("-------------------------------------\n");
-    ww_printf("sizeof(LOG_RAM_HEADER_T) = %u\n", sizeof(LOG_RAM_HEADER_T));
-    ww_printf("LOG_RAM_HEADER_SIZE = %u\n", LOG_RAM_HEADER_SIZE);
+    ww_printf("sizeof(LOG_RAM_HEADER_T) = %u\n", (U32)sizeof(LOG_RAM_HEADER_T));
+    ww_printf("LOG_RAM_HEADER_SIZE = %u\n", (U32)LOG_RAM_HEADER_SIZE);
     ww_printf("=====================================\n");
 }
 

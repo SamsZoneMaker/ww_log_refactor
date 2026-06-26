@@ -34,8 +34,12 @@ INCLUDES = \
     -Isrc/demo \
     -Isrc/drivers
 
+# Force-include autoconf.h on every TU, the way the Kconfig build does on target
+# (CONFIG_N_LOG_MODE_* / CONFIG_N_LOG_BACKEND_* come from there). This lets the
+# real firmware .c files compile unmodified -- they don't #include autoconf.h.
 BASE_CFLAGS = -Wall -Wextra $(INCLUDES) -g -O2 \
               -DSIMULATION_MODE \
+              -include autoconf.h \
               -Wno-unused-variable -Wno-unused-function \
               -Wno-unused-parameter
 STATIC_OPTS ?=
@@ -43,16 +47,19 @@ CFLAGS = $(BASE_CFLAGS) $(STATIC_OPTS)
 LDFLAGS =
 
 # ---- Source lists ----------------------------------------------------------
-# Log module: compile the two portable files; skip the two FW-only ones.
+# The real firmware log core, compiled unmodified. The only sim-side piece is
+# the device backend (sim/), which provides the DLM RAM region and (when the
+# EXT_MEM backend is on) file-backed flash/eeprom + partition table.
 LOG_MODULE_SRCS = \
     log/n_ww_log_control.c \
-    log/n_ww_logoutput.c
+    log/n_ww_logoutput.c \
+    log/n_ww_log_storage.c \
+    log/n_ww_log_task.c
 
-# Sim replacements for the two uncompilable FW-specific files
+# Sim device backend (not a fork of module logic; just the hardware shims).
 SIM_IMPL_SRCS = \
-    sim/n_ww_log_storage_sim.c \
-    sim/n_ww_log_task_sim.c \
-    sim/sim_dlm_ram.c
+    sim/sim_dlm_ram.c \
+    sim/sim_ext_storage.c
 
 # Registered source dirs (scanned by gen_log_map.py)
 LOG_SRCS = $(wildcard src/demo/*.c src/drivers/*.c)
