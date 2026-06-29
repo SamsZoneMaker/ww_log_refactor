@@ -61,10 +61,11 @@ extern "C"
 #define LOG_BLOCK_MAGIC           (0x4C4F4748)   /* 'LOGH' - per-block header       */
 
 #define LOG_EXT_BLOCK_SIZE        (512)                        /* one ring slot   */
-#define LOG_EXT_BLOCK_HEADER_SIZE (sizeof(LOG_BLOCK_HEADER_T)) /* 32 bytes        */
+#define LOG_EXT_BLOCK_HEADER_SIZE (sizeof(LOG_BLOCK_HEADER_T)) /* 28 bytes        */
 #define LOG_EXT_FOOTER_SIZE       (sizeof(LOG_EXT_FOOTER_T))   /* 32 bytes        */
 #define LOG_EXT_PAYLOAD_SIZE      (LOG_EXT_BLOCK_SIZE - LOG_EXT_BLOCK_HEADER_SIZE)
-/* 4K partition: (4096-32)/512 = 7 ring slots (480B payload each), ~480B unused. */
+/* 4K partition: (4096-32)/512 = 7 ring slots (484B payload each), 480B unused
+ * (3584B blocks + 32B footer = 3616, leaving 480B before the footer). */
 
 /* Ext-full policy: RING overwrites the oldest block; FREEZE stops flushing.
  * Exactly one must be defined (default RING, set in autoconf.h). */
@@ -79,7 +80,7 @@ extern "C"
 /*************************** type definition start ***************************/
 
 /**
- * RAM Log Header (64 bytes)
+ * RAM Log Header (32 bytes)
  * Located at DLM_MAINTAIN_LOG_BASE_ADDR
  */
 typedef struct
@@ -110,7 +111,7 @@ typedef struct
     LOG_RAM_HEADER_T *header; /*==< Pointer to header */
     U8  *data;                /*==< Pointer to data area */
     U16 data_size;            /*==< Data area size (4064 bytes) */
-    U16 threshold;           /*==< Flush threshold (1024 bytes) */
+    U16 threshold;           /*==< Flush threshold (LOG_RAM_FLUSH_THRESHOLD = 480 bytes) */
 } LOG_RAM_BUFFER_T;
 
 /* Err Code definition */
@@ -154,7 +155,7 @@ typedef struct
     U32 crc;           /*==< CRC/checksum over the first data_size payload  */
     U32 reserved1;     /*==< */
     U32 reserved2;     /*==< */
-} LOG_BLOCK_HEADER_T;  /*==< Total: 32 bytes */
+} LOG_BLOCK_HEADER_T;  /*==< Total: 28 bytes (4+4+4+2+2+4+4+4); payload = 512-28 = 484 */
 
 /* Log context in external storage (RAM-resident runtime state, not persisted) */
 typedef struct
@@ -166,7 +167,7 @@ typedef struct
     U32 log_offset;
     U32 log_size;
     U32 ext_write_offset;  /*==< byte offset of the current write slot       */
-    U16 block_count;       /*==< number of ring slots = (log_size-32)/1024   */
+    U16 block_count;       /*==< number of ring slots = (log_size-32)/512    */
     U16 write_slot;        /*==< index of the slot to write next (0..N-1)    */
     U32 next_seq;          /*==< sequence number for the next block          */
     U32 wrap_count;        /*==< how many times the ring has wrapped         */
