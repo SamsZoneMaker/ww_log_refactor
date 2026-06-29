@@ -67,11 +67,19 @@ static SemaphoreHandle_t g_log_mutex = NULL;
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
 /**
- * @brief The entry function for the flush task
- * * @note
- * - Waiting for semaphore
- * - If receive the semaphore, execute log_ram_flush()
- * - Continue looping and wait for the next signal
+ * @brief The entry function for the flush task.
+ *
+ * Two flush triggers, both handled here:
+ *   - volume: a writer signals the semaphore once pending_len >= threshold
+ *             (~one block); the task wakes immediately.
+ *   - time:   xSemaphoreTake also returns after LOG_FLUSH_TIMEOUT_MS with no
+ *             signal, so whatever is pending (even below threshold) still gets
+ *             flushed periodically.
+ *
+ * On EITHER wake reason the task drains all pending blocks (one block per
+ * log_ram_flush() call) until the RAM ring is empty or the archive is full
+ * (FREEZE). The return value of xSemaphoreTake is intentionally ignored -- the
+ * pending_len check below is the single source of truth for "is there work".
  */
 static void log_flush_task(void *pvParameters)
 {
@@ -83,26 +91,20 @@ static void log_flush_task(void *pvParameters)
 
     while(1)
     {
-        if (xSemaphoreTake(g_flush_semaphore, flush_timeout) == pdTRUE)
+        (void)xSemaphoreTake(g_flush_semaphore, flush_timeout);
+
+        /* Drain the backlog: keep flushing whole blocks while data is pending. */
+        while (log_ram_get_pending_len() > 0)
         {
             if (log_ext_mem_is_full())
             {
-                continue; // if extmem is full, skip flushing, ring buffer in ram
+                break;  /* FREEZE: archive full, keep the ring in RAM */
             }
 
-            /* Check if there is any data that needs to be flushed. */
-            U32 pending = log_ram_get_pending_len();
-
-            if (pending > 0)
+            if (log_ram_flush() != WW_OK)
             {
-                ww_printf("LOG_FLUSH_TASK: Flushing, pending_len = %u\n", pending);
-
-                int ret = log_ram_flush();
-
-                if (ret != WW_OK)
-                {
-                    ww_printf("LOG_FLUSH_TASK: Flush failed, ret = %d\n", ret);
-                }
+                ww_printf("LOG_FLUSH_TASK: Flush failed\n");
+                break;
             }
         }
     }

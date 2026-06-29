@@ -133,6 +133,48 @@ static void ext_footer_write(void)
     (void)ext_dev_write(foff, (U8 *)&f, sizeof(f));
 }
 
+/* Try to resume the block ring from the tail footer after a (power-loss) restart.
+ * The ext context (g_log_ext_ctx) is RAM-resident and lost on reboot, but the
+ * device keeps the previously flushed blocks + footer. If the footer's magic,
+ * checksum, device type and write_slot all validate, restore the ring cursor so
+ * new flushes continue after the newest block WITHOUT erasing prior boots' logs.
+ * Returns WW_TRUE on a successful resume, WW_FALSE on first use / no valid footer
+ * (caller then erases and starts fresh).
+ * @note Assumes block_count is already computed by the caller. */
+static WW_BOOL ext_footer_try_resume(void)
+{
+    LOG_EXT_FOOTER_T f;
+    U32 foff = g_log_ext_ctx.log_offset + g_log_ext_ctx.log_size - LOG_EXT_FOOTER_SIZE;
+
+    if (ext_dev_read(foff, (U8 *)&f, sizeof(f)) != WW_OK)
+    {
+        return WW_FALSE;
+    }
+    if (f.magic != LOG_EXTMEM_MAGIC)
+    {
+        return WW_FALSE;                       /* first use / erased / garbage */
+    }
+    if (LOG_CALC_STRUCT_CHECKSUM(&f) != f.checksum)
+    {
+        return WW_FALSE;                       /* torn / corrupt footer        */
+    }
+    if (f.mem_type != (U16)g_log_ext_ctx.ext_mem_type)
+    {
+        return WW_FALSE;                       /* footer from a different layout */
+    }
+    if (f.write_slot >= g_log_ext_ctx.block_count)
+    {
+        return WW_FALSE;                       /* cursor out of range          */
+    }
+
+    g_log_ext_ctx.write_slot       = f.write_slot;
+    g_log_ext_ctx.wrap_count       = f.wrap_count;
+    g_log_ext_ctx.next_seq         = f.next_seq;
+    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset
+                                   + (U32)f.write_slot * LOG_EXT_BLOCK_SIZE;
+    return WW_TRUE;
+}
+
 /*************************** static function end *****************************/
 
 
@@ -241,13 +283,9 @@ WW_RTN log_ext_mem_init(void)
     g_log_ext_ctx.log_size = log_entry->part_size;
     g_log_ext_ctx.log_part_valid = WW_TRUE;
 
-    /* Step 4: Compute the block-ring geometry and clear the LOG partition. */
+    /* Step 4: Compute the block-ring geometry. */
     g_log_ext_ctx.block_count = (U16)((g_log_ext_ctx.log_size - LOG_EXT_FOOTER_SIZE)
                                       / LOG_EXT_BLOCK_SIZE);
-    g_log_ext_ctx.write_slot       = 0;
-    g_log_ext_ctx.wrap_count       = 0;
-    g_log_ext_ctx.next_seq         = 0;
-    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset;
 
     if (g_log_ext_ctx.block_count == 0)
     {
@@ -256,6 +294,24 @@ WW_RTN log_ext_mem_init(void)
         g_log_ext_ctx.initialized = WW_TRUE;
         return LOG_EXT_ERR_NO_LOG_PART;
     }
+
+    /* Step 5: Resume from a valid footer (power-loss retained archive) so prior
+     * boots' blocks survive the reboot; only erase + start fresh when there is no
+     * valid footer (first use / corrupt). This is the device-side half of the
+     * "RAM preserved -> reset -> recover -> decode" closed loop. */
+    if (ext_footer_try_resume() == WW_TRUE)
+    {
+        g_log_ext_ctx.initialized = WW_TRUE;
+        ww_printf("[LOG][EXT]: Resumed ring (slot=%u wrap=%u next_seq=%u)\n",
+                  g_log_ext_ctx.write_slot, g_log_ext_ctx.wrap_count,
+                  g_log_ext_ctx.next_seq);
+        return LOG_EXT_OK;
+    }
+
+    g_log_ext_ctx.write_slot       = 0;
+    g_log_ext_ctx.wrap_count       = 0;
+    g_log_ext_ctx.next_seq         = 0;
+    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset;
 
     if (ext_partition_erase() != WW_OK)
     {
@@ -293,6 +349,16 @@ int log_ext_mem_clear(void)
     return LOG_EXT_OK;
 }
 
+/* Drop the RAM-resident ext context so the next log_ext_mem_available() re-runs
+ * log_ext_mem_init() -- i.e. simulate a reboot where g_log_ext_ctx is lost but
+ * the device bytes (blocks + footer) persist. Used by the resume self-test; on
+ * real hardware the reboot zeroes the static for you. */
+void log_ext_force_reinit(void)
+{
+    ww_memset(&g_log_ext_ctx, 0, sizeof(g_log_ext_ctx));
+    g_extmem_dev = NULL;
+}
+
 /**
  * @brief Flush ONE block of whole entries from the RAM ring to external storage.
  *
@@ -309,6 +375,9 @@ int log_ext_mem_clear(void)
  * (log_ram_consume) under the log mutex, so concurrent writers always see a
  * consistent ring; the slow device I/O happens after the lock is released.
  *
+ * @note NOT re-entrant: uses a static block buffer and fills it under the lock
+ *       but writes the device after unlocking, so it must have a single caller
+ *       (the flush task). Do not call it concurrently from another context.
  * @return LOG_EXT_OK on success/no-op, or a LOG_EXT_ERR_* code.
  */
 int log_ram_flush(void)

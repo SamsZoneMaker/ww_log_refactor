@@ -250,6 +250,53 @@ static void test_ext_ring_wrap(void)
     CHECK(log_ext_get_write_slot() < bc, "write_slot within ring");
 }
 
+static void test_ext_resume(void)
+{
+    section("External storage: footer resume across reboot (no erase)");
+    if (log_ext_mem_available() != WW_TRUE)
+    {
+        CHECK(0, "external storage available");
+        return;
+    }
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+
+    /* Flush a few blocks, then snapshot the ring cursor. */
+    U32 i;
+    for (i = 0; i < 80; i++)        /* 80 * 8B -> ~2 blocks */
+    {
+        t_write(1);
+    }
+    int guard = 0;
+    while (log_ram_get_pending_len() > 0 && guard++ < 2000)
+    {
+        if (log_ram_flush() != LOG_EXT_OK) { break; }
+    }
+    U16 slot = log_ext_get_write_slot();
+    U32 seq  = log_ext_get_next_seq();
+    U32 wrap = log_ext_get_wrap_count();
+    CHECK(seq > 0, "blocks flushed before reboot");
+
+    /* Simulate a reboot: ext ctx (RAM) is lost, device bytes persist. */
+    log_ext_force_reinit();
+    CHECK(log_ext_get_initialized() == WW_FALSE, "ext ctx dropped (reboot sim)");
+
+    /* First access re-inits -> must RESUME from footer, not erase. */
+    CHECK(log_ext_mem_available() == WW_TRUE, "re-init succeeds after reboot");
+    CHECK(log_ext_get_write_slot() == slot,  "write_slot resumed from footer");
+    CHECK(log_ext_get_next_seq()  == seq,   "next_seq resumed from footer");
+    CHECK(log_ext_get_wrap_count() == wrap,  "wrap_count resumed from footer");
+
+    /* The previously flushed block 0 must still be intact (proves no erase). */
+    static U8 buf[LOG_EXT_BLOCK_SIZE];
+    log_ext_mem_read(buf, LOG_EXT_BLOCK_SIZE);
+    LOG_BLOCK_HEADER_T *bh = (LOG_BLOCK_HEADER_T *)buf;
+    CHECK(bh->magic == LOG_BLOCK_MAGIC, "prior block preserved (not erased)");
+
+    /* Cleanup so later runs start from a known-empty archive. */
+    log_ext_mem_clear();
+}
+
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 
 #endif /* CONFIG_N_LOG_BACKEND_RAM */
@@ -279,6 +326,7 @@ int test_log_run_all(void)
 #if defined(CONFIG_N_LOG_BACKEND_EXT_MEM)
     test_ext_flush();
     test_ext_ring_wrap();
+    test_ext_resume();
 #endif
     /* leave the log in a clean state for whatever runs next */
     n_ww_log_set_level_threshold(N_WW_LOG_LEVEL_DBG);

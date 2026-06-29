@@ -181,6 +181,13 @@ WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count)
     U16 required = 4 + (U16)param_count * 4; /* encoded header + N params */
     U8  i;
 
+    /* Not initialised yet (LOG fired before n_ww_log_init): g_ram_buffer.header
+     * is NULL, so bail instead of dereferencing it. */
+    if (header == NULL)
+    {
+        return WW_ERR;
+    }
+
     /* An entry larger than the whole ring can never fit -> discard up front
      * (would otherwise loop forever evicting). */
     if (required > g_ram_buffer.data_size - 1)

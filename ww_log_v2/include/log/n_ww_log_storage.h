@@ -224,6 +224,7 @@ int  log_ext_mem_available(void);
 int  log_ext_mem_read(U8 *buf, U32 len);
 void log_ext_mem_dump(void);
 int  log_ext_mem_clear(void);
+void log_ext_force_reinit(void);   /* drop ext ctx -> next access re-inits (reboot sim/test) */
 int  log_ram_flush(void);
 
 /* RAM-ring -> ext bridge (implemented in n_ww_log_ram.c, called by the flush
