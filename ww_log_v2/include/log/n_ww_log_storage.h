@@ -224,6 +224,12 @@ int  log_ext_mem_read(U8 *buf, U32 len);
 void log_ext_mem_dump(void);
 int  log_ext_mem_clear(void);
 int  log_ram_flush(void);
+
+/* RAM-ring -> ext bridge (implemented in n_ww_log_ram.c, called by the flush
+ * driver in n_ww_log_storage.c under the log mutex). */
+U16  log_ram_pack_block(U8 *dst, U16 *ecount);
+void log_ram_consume(U16 packed);
+
 WW_BOOL log_ram_is_need_flush(void);
 U32  log_ram_get_threshold(void);
 U32  log_ext_get_log_size(void);

@@ -13,7 +13,6 @@
  */
 
 #include "log/n_ww_log.h"
-#include "log/n_ww_log_control.h"
 #include <stdio.h>
 
 #if (CONFIG_N_LOG_BACKEND_RAM == 1)

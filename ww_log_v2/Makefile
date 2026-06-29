@@ -54,6 +54,7 @@ LDFLAGS =
 LOG_MODULE_SRCS = \
     log/n_ww_log_control.c \
     log/n_ww_logoutput.c \
+    log/n_ww_log_ram.c \
     log/n_ww_log_storage.c \
     log/n_ww_log_task.c
 

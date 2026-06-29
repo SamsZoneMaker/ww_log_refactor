@@ -51,8 +51,8 @@ static inline int ww_vsnprintf(char *buf, int size, const char *linesep,
 #define ww_memcpy(dst, src, len)    memcpy((dst), (src), (len))
 #define ww_memcmp(a, b, len)        memcmp((a), (b), (len))
 
-/* Note: N_RETURN_*_WO_PRINT macros are provided by n_ww_log_control.h
- * (the firmware header), so the sim does not redefine them here. */
+/* Note: N_RETURN_*_WO_PRINT macros are provided by n_ww_log_macro.h
+ * (pulled in via n_ww_log.h below), so the sim does not redefine them here. */
 
 /* ======================================================================
  * Logging
