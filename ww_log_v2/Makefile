@@ -1,6 +1,6 @@
 # Makefile for ww_log v2 (PC simulation)
 #
-# Log mode and backends are chosen in sim/autoconf.h.
+# Log mode and backends are chosen in sim/log.conf (Kconfig .conf syntax).
 # The two original FW-specific files (n_ww_log_storage.c, n_ww_log_task.c)
 # have syntax errors (#include <>) and are replaced by sim/ equivalents.
 #
@@ -23,8 +23,14 @@ WW_LOG_MAP  = ww_log_map.json
 FILE_IDS_MK = $(OUT_DIR)/file_ids.mk
 AUTO_HEADER = $(OUT_DIR)/auto_file_ids.h
 MAP_ID_H    = $(OUT_DIR)/log_map_id.h
-LOG_AUTOCONF= $(OUT_DIR)/log_autoconf.h
 GEN         = scripts/log/gen_log_map.py
+
+# Sim-only: stands in for the firmware's Kconfig .conf -> autoconf.h step.
+# Deliberately NOT part of gen_log_map.py, which stays purely about file IDs and
+# the map so it merges into the firmware tree with nothing dead in it.
+LOG_AUTOCONF = $(OUT_DIR)/log_autoconf.h
+LOG_CONF     = sim/log.conf
+CONF2AUTOCONF= sim/conf_to_autoconf.py
 
 # Archive of released maps, indexed by map_id. The boot record in a log stream
 # names the map that decodes it; this is where the decoder finds that map for
@@ -99,14 +105,14 @@ OBJS = $(ALL_SRCS:%.c=$(OUT_DIR)/%.o)
 #                 file was added/removed or a module ID moved. This is what the
 #                 objects depend on, so an ordinary source edit rebuilds just
 #                 that one object.
-$(FILE_IDS_MK): $(LOG_CONFIG) $(GEN) $(LOG_SRCS) $(LOG_SRC_DIRS)
+$(FILE_IDS_MK): $(LOG_CONFIG) $(GEN) $(LOG_CONF) $(CONF2AUTOCONF) $(LOG_SRCS) $(LOG_SRC_DIRS)
 	@mkdir -p $(OUT_DIR)
 	@echo "[GEN ] $(WW_LOG_MAP)"
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --mapid  --write $(MAP_ID_H)
-	@$(PY) $(GEN) $(LOG_CONFIG) --autoconf --write $(LOG_AUTOCONF)
+	@$(PY) $(CONF2AUTOCONF) $(LOG_CONF) --write $(LOG_AUTOCONF)
 
 $(AUTO_HEADER): $(FILE_IDS_MK)
 
@@ -119,7 +125,7 @@ map: $(LOG_CONFIG) $(GEN)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --mapid  --write $(MAP_ID_H)
-	@$(PY) $(GEN) $(LOG_CONFIG) --autoconf --write $(LOG_AUTOCONF)
+	@$(PY) $(CONF2AUTOCONF) $(LOG_CONF) --write $(LOG_AUTOCONF)
 	@echo "Map regenerated."
 
 # Keep a copy of the CURRENT map under its map_id, for decoding logs produced by

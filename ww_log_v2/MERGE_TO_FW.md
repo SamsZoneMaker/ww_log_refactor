@@ -21,8 +21,8 @@ cp ww_log_map.json  maps/ww_log_map_<当前map_id>.json
 
 | 顺序 | 文件 | 说明 |
 |---|---|---|
-| 1 | `scripts/log/gen_log_map.py` | 整体替换 |
-| 2 | `scripts/log/log_config.json` | **只合 `modules` 段**，`build` 块不要合（见阶段 4） |
+| 1 | `scripts/log/gen_log_map.py` | 整体替换。**只管 ID 和 map，没有配置渲染** —— `.conf → autoconf.h` 是仿真侧 `sim/conf_to_autoconf.py` 的事，不进固件 |
+| 2 | `scripts/log/log_config.json` | 整体替换。只含模块划分，没有构建配置 |
 
 **验证**：重跑生成器，检查 `ww_log_map.json` 的 `files` 段里**现存文件的 id 一个都没变**。
 
@@ -64,7 +64,7 @@ cp ww_log_map.json  maps/ww_log_map_<当前map_id>.json
 
 把 `Kconfig.fw` 的内容并进你们的 Kconfig。**改动点见下面「Kconfig 怎么改」一节。**
 
-`log_config.json` 的 `build` 块在 FW 上**不使用** —— Kconfig 是配置源，`gen_log_map.py --autoconf` 这一步在 FW 构建里不要调。
+配置源就是你们现有的 Kconfig + `.conf → autoconf.h` 流程，不需要额外的生成步骤。仿真侧那份 `sim/log.conf` 用的是同样的语法和符号名，可以直接和 defconfig 片段对照。
 
 **验证**：`menuconfig` 能正常选；旧 defconfig 不加任何新符号也能编（所有新符号都有兜底默认值）。
 
@@ -124,7 +124,7 @@ cp ww_log_map.json  maps/ww_log_map_<当前map_id>.json
 | `sim/*` | 仿真专用的硬件壳 |
 | `Makefile` | 仿真专用，只移植阶段 2 的规则 |
 | `examples/main.c` | 仿真主程序 |
-| `log_config.json` 的 `build` 块 | FW 上由 Kconfig 承担 |
+| `sim/log.conf`、`sim/conf_to_autoconf.py` | 仿真专用，FW 已有等价流程 |
 | `Kconfig.fw` | 内容并进你们的 Kconfig，文件本身不用带 |
 
 ---

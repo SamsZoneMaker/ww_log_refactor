@@ -5,15 +5,13 @@
  * Force-included on every translation unit by the Makefile (-include autoconf.h),
  * the same way the on-target Kconfig build injects its CONFIG_* symbols.
  *
- * There is nothing to edit here any more: the log module's mode, backends and
- * tuning all come from the `build` block of scripts/log/log_config.json, which
- * gen_log_map.py turns into output/log_autoconf.h. One data file is the source
- * of truth, and the mode is a word ("encode"/"string"/"disabled") that the
- * generator validates -- the old three-mutually-exclusive-#defines arrangement
- * silently fell through to DISABLED if you forgot to uncomment one.
+ * There is nothing to edit here: the log module's mode, backends and tuning all
+ * come from sim/log.conf, which sim/conf_to_autoconf.py renders into
+ * output/log_autoconf.h -- the same step the firmware build performs on its own
+ * Kconfig .conf files.
  *
- * On target the same generator output can be dropped in beside the Kconfig
- * autoconf.h, or the `build` block can be rendered as a defconfig fragment.
+ * log.conf uses Kconfig .conf syntax and the symbol names from Kconfig.fw, so a
+ * sim config and a firmware defconfig fragment are interchangeable.
  */
 
 #ifndef __AUTOCONF_H__

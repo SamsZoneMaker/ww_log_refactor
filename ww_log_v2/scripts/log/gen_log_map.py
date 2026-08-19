@@ -20,7 +20,6 @@ Modes:
   gen_log_map.py <config> --makefile                derive build/file_ids.mk  (stdout)
   gen_log_map.py <config> --header                  derive auto_file_ids.h    (stdout)
   gen_log_map.py <config> --mapid                   derive log_map_id.h       (stdout)
-  gen_log_map.py <config> --autoconf                derive log_autoconf.h     (stdout)
   gen_log_map.py <config> --archive <dir>           archive the map as <dir>/ww_log_map_<id>.json
 
 Options:
@@ -596,115 +595,6 @@ def emit_header(config, the_map):
 # trailing D there); nothing in the log core keys off the disabled symbol -- it
 # is the #else fallthrough in n_ww_log_macro.h -- but the sim must agree with
 # the target so a config means the same thing in both.
-MODES = {'encode': 'CONFIG_N_LOG_MODE_ENCODE',
-         'string': 'CONFIG_N_LOG_MODE_STRING',
-         'disabled': 'CONFIG_N_LOG_MODE_DISABLE'}
-EXT_FULL_POLICIES = {'freeze': 'CONFIG_N_LOG_EXT_FULL_FREEZE',
-                     'erase': 'CONFIG_N_LOG_EXT_FULL_ERASE'}
-
-
-def emit_autoconf(config):
-    """Turn the config's `build` block into the CONFIG_* / tuning defines.
-
-    This exists so the knobs live in ONE place that is data rather than C. The
-    mode in particular used to be three mutually exclusive #defines that a human
-    commented in and out; forgetting to comment one back in did not fail the
-    build, it silently fell through to DISABLED and the firmware shipped mute.
-    Here the mode is a string, the three are generated from it, and an
-    unrecognised value is an error.
-    """
-    b = config.get('build', {})
-
-    def level(key, default):
-        name = str(b.get(key, default)).upper()
-        if name not in LEVELS:
-            sys.exit("Error: build.%s must be one of %s, got %r"
-                     % (key, '/'.join(LEVELS), b.get(key)))
-        return 'N_WW_LOG_LEVEL_' + name
-
-    def num(key, default):
-        try:
-            return int(b.get(key, default))
-        except (TypeError, ValueError):
-            sys.exit("Error: build.%s must be an integer, got %r"
-                     % (key, b.get(key)))
-
-    mode = str(b.get('mode', 'encode')).lower()
-    if mode not in MODES:
-        sys.exit("Error: build.mode must be one of %s, got %r"
-                 % ('/'.join(sorted(MODES)), b.get('mode')))
-    policy = str(b.get('ext_full_policy', 'freeze')).lower()
-    if policy not in EXT_FULL_POLICIES:
-        sys.exit("Error: build.ext_full_policy must be one of %s, got %r"
-                 % ('/'.join(sorted(EXT_FULL_POLICIES)), b.get('ext_full_policy')))
-
-    def boolean(name, key, default=True):
-        """Emit a Kconfig-shaped bool: `#define X 1` when on, NOTHING when off.
-
-        Kconfig omits unset bools entirely, and the log core tests these two
-        ways -- `#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM` in some files, `#if (... ==
-        1)` in others. Emitting `#define X 0` would satisfy the second and break
-        the first (RAM off would still compile the mutex/flush-task half in), so
-        match Kconfig rather than invent a third convention.
-        """
-        if b.get(key, default) if key else default:
-            return "#define %-29s 1" % name
-        return "/* %s is not set */" % name
-
-    backends = b.get('backends', {})
-    lines = [
-        "/**",
-        " * @file log_autoconf.h",
-        " * @brief Auto-generated log configuration. DO NOT EDIT.",
-        " *",
-        " * Generated from the `build` block of scripts/log/log_config.json by",
-        " * scripts/log/gen_log_map.py. Edit the JSON, not this file.",
-        " */",
-        "",
-        "#ifndef LOG_AUTOCONF_H",
-        "#define LOG_AUTOCONF_H",
-        "",
-        "/* ===== Mode (exactly one, from build.mode = %r) ===== */" % mode,
-        "#define %s" % MODES[mode],
-        "",
-        "/* ===== Backends ===== */",
-    ]
-    for name, key in (('CONFIG_N_LOG_BACKEND_UART', 'uart'),
-                      ('CONFIG_N_LOG_BACKEND_RAM', 'ram'),
-                      ('CONFIG_N_LOG_BACKEND_EXT_MEM', 'ext_mem')):
-        if backends.get(key, True):
-            lines.append("#define %-29s 1" % name)
-        else:
-            lines.append("/* %s is not set */" % name)
-
-    lines += [
-        "",
-        "/* ===== Level thresholds ===== */",
-        "/* Compiled out entirely above this level (zero code size). */",
-        "#define N_WW_LOG_COMPILE_THRESHOLD    %s" % level('compile_threshold', 'DBG'),
-        "/* RAM keeps every level; only these reach external storage. */",
-        "#define N_WW_LOG_EXT_LEVEL_THRESHOLD  %s" % level('ext_level_threshold', 'WRN'),
-        "",
-        "/* ===== External storage ===== */",
-        "#define %s" % EXT_FULL_POLICIES[policy],
-    ]
-    lines.append(boolean('CONFIG_N_LOG_EXT_FLUSH_MARKER', 'ext_flush_marker'))
-
-    lines += [
-        "#define LOG_EXT_FLUSH_STAGE_SIZE      (%d)" % num('ext_flush_stage_size', 256),
-        "",
-        "/* ===== RAM ring / flush task ===== */",
-        "#define LOG_RAM_FLUSH_THRESHOLD       (%d)" % num('ram_flush_threshold', 480),
-        "#define LOG_WRITE_TIMEOUT_MS          (%d)" % num('write_timeout_ms', 6),
-        "#define LOG_FLUSH_TIMEOUT_MS          (%d)" % num('flush_timeout_ms', 10000),
-        "#define LOG_FLUSH_TASK_STACK_SIZE     (%d)" % num('flush_task_stack', 256),
-        "#define LOG_FLUSH_TASK_PRIORITY       (%d)" % num('flush_task_priority', 1),
-        "",
-        "#endif /* LOG_AUTOCONF_H */",
-    ]
-    return '\n'.join(lines)
-
-
 def emit_map_id(the_map):
     """The one generated header carrying the map identity into the firmware.
 
@@ -805,10 +695,6 @@ def main():
         vh = (flags[flags.index("--version-header") + 1]
               if "--version-header" in flags else None)
         archive_map(the_map, flags[flags.index("--archive") + 1], vh)
-        return
-
-    if "--autoconf" in flags:          # derives from the config alone, no map
-        emit(emit_autoconf(config))
         return
 
     if "--makefile" in flags or "--header" in flags or "--mapid" in flags:

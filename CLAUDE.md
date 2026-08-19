@@ -14,26 +14,25 @@
 
 ---
 
-## 1. 配置：唯一来源是 `scripts/log/log_config.json`
+## 1. 配置：两个正交的来源
 
-模式、后端、所有阈值都在这里，**不再散落在头文件里**：
+**模式 / 后端 / 阈值 —— 走 Kconfig 符号**，两边用同一套符号名（见 `Kconfig.fw`）：
+
+| | 输入 | 转换 |
+|---|---|---|
+| 固件 | Kconfig `.conf` | 固件自己的 `.conf → autoconf.h` |
+| 仿真 | `sim/log.conf`（同样的 `.conf` 语法、同样的符号名） | `sim/conf_to_autoconf.py` → `output/log_autoconf.h` |
+
+所以一份 sim 配置和一份固件 defconfig 片段是**可互换的**，diff 一下就能比对。`sim/autoconf.h` 只是 include 生成结果的薄壳。
+
+头文件里每个旋钮按优先级解析：**显式 `-D` / 生成的头 → `CONFIG_N_LOG_*` → 默认值**，所以什么都不选也能编。
+
+仿真的 `.conf` 是手写的，`conf_to_autoconf.py` 补了两条 menuconfig 本来会给的校验：**恰好选一个 mode**（一个都不选会静默降级成 DISABLED，即出厂就是哑的），以及 **EXT_MEM 必须蕴含 RAM**。
+
+**模块 → 目录 —— 走 `scripts/log/log_config.json`**：
 
 ```json
 {
-  "build": {
-    "mode": "encode",                    // encode | string | disabled
-    "backends": { "uart": true, "ram": true, "ext_mem": true },
-    "compile_threshold": "DBG",          // 高于此级别的日志编译期消失
-    "ext_level_threshold": "WRN",        // RAM 存全部，只有这些进外存
-    "ext_full_policy": "freeze",         // freeze | erase
-    "ext_flush_marker": true,
-    "ram_flush_threshold": 480,
-    "ext_flush_stage_size": 256,
-    "write_timeout_ms": 6,
-    "flush_timeout_ms": 10000,
-    "flush_task_stack": 256,
-    "flush_task_priority": 1
-  },
   "modules": {
     "DEMO":    { "id": 1, "dirs": ["src/demo"],               "enable": true },
     "TEST":    { "id": 2, "dirs": ["src/test"],               "enable": true },
@@ -43,11 +42,7 @@
 }
 ```
 
-`gen_log_map.py --autoconf` 把 `build` 块渲染成 `output/log_autoconf.h`（`CONFIG_N_LOG_*` 等宏），`sim/autoconf.h` 只是 include 它的薄壳。
-
-**mode 用字符串而不是三个互斥 `#define`**：旧写法靠人工注释/反注释，漏掉一个不会报错，会**静默降级成 DISABLED**（`n_ww_log_macro.h` 的 else 分支）。现在拼错会直接 `Error: build.mode must be one of ...`。
-
-头文件里的同名宏都加了 `#ifndef` 兜底，不走生成器的构建仍可编译。
+这个文件**只管模块划分**，不含构建配置 —— 构建配置是 Kconfig 的职责，`gen_log_map.py` 也就只管 ID 和 map，因此能原样合进固件树，里面没有一行死代码。
 
 模块由**路径前缀匹配**判定，最长前缀优先；不在任何 `dirs` 下的 `.c` → 告警 + 该文件日志关闭（不阻断编译）。module_id 人工分配、**稳定**（动态开关的 key 在它上面），范围 0–31。
 
@@ -341,9 +336,9 @@ ww_log_v2/
 ├── ww_log_map.json          ← 生成并提交（构建 + 解码共用）
 ├── maps/                    ← 发版 map 归档，按 map_id 命名（make map-archive）
 ├── scripts/log/
-│   ├── log_config.json      ← 唯一配置源：build 块 + 模块→目录
+│   ├── log_config.json      ← 模块→目录（不含构建配置）
 │   ├── gen_log_map.py       ← 扫描 → map / file_ids.mk / auto_file_ids.h
-│   │                          / log_map_id.h / log_autoconf.h / 归档
+│   │                          / log_map_id.h / 归档
 │   └── log_decoder.py       ← 离线解码（--map / --map-dir）
 ├── include/log/
 │   ├── n_ww_log.h           ← 唯一公共入口
@@ -354,7 +349,11 @@ ww_log_v2/
 │   ├── n_ww_log_storage.h   ← RAM 环 + 外存几何
 │   └── n_ww_log_task.h
 ├── log/                     ← 固件核心（control / output / ram / storage / task）
+├── Kconfig.fw               ← 固件侧 Kconfig 片段（仿真不读）
+├── MERGE_TO_FW.md           ← 合入内网 FW 的分阶段清单
 ├── sim/                     ← PC 仿真硬件壳（DLM RAM、flash/eeprom、分区表、version.h）
+│   ├── log.conf             ← 仿真配置，Kconfig .conf 语法
+│   └── conf_to_autoconf.py  ← .conf → autoconf.h（仿真专用，不进固件）
 ├── src/                     ← demo / drivers / test 三个被登记的模块
 ├── examples/main.c
 ├── host_driver/             ← dora 部署（log_operation.py / log_tool.py / dora.py）
