@@ -62,11 +62,40 @@ cp ww_log_map.json  maps/ww_log_map_<当前map_id>.json
 
 ## 阶段 4：Kconfig
 
-把 `Kconfig.fw` 的内容并进你们的 Kconfig。**改动点见下面「Kconfig 怎么改」一节。**
+配置源就是你们现有的 Kconfig + `.conf → autoconf.h` 流程，**不需要任何额外的生成步骤**。`sim/log.conf` 是日志模块认识的全部符号的权威清单，可以直接和 defconfig 片段对照。
 
-配置源就是你们现有的 Kconfig + `.conf → autoconf.h` 流程，不需要额外的生成步骤。仿真侧那份 `sim/log.conf` 用的是同样的语法和符号名，可以直接和 defconfig 片段对照。
+Kconfig 里需要动的只有两件事：
 
-**验证**：`menuconfig` 能正常选；旧 defconfig 不加任何新符号也能编（所有新符号都有兜底默认值）。
+**① 一个真 bug —— `N_LOG_BACKEND_EXT_MEM` 必须依赖 RAM**
+
+```diff
+ config N_LOG_BACKEND_EXT_MEM
+-    depends on N_LOG && N_LOG_MODE_ENCODE
++    depends on N_LOG && N_LOG_MODE_ENCODE && N_LOG_BACKEND_RAM
+```
+
+外存后端没有自己的存储，是从 RAM 环里搬。现在的 Kconfig 允许只选 EXT 不选 RAM，那个组合会在链接期挂掉；代码里已经加了 `#error` 明说要求，Kconfig 堵上是双保险。
+
+**② 补上原本写死在头文件里的旋钮**（都有兜底默认值，不加也能编）
+
+| 符号 | 类型 | 默认 |
+|---|---|---|
+| `N_LOG_COMPILE_THRESHOLD_{ERR,WRN,INF,DBG}` | choice | DBG |
+| `N_LOG_EXT_LEVEL_THRESHOLD_{ERR,WRN,INF,DBG}` | choice | WRN |
+| `N_LOG_EXT_FULL_{FREEZE,ERASE}` | choice | FREEZE |
+| `N_LOG_EXT_FLUSH_MARKER` | bool | y |
+| `N_LOG_RAM_FLUSH_THRESHOLD` | int | 480 |
+| `N_LOG_EXT_FLUSH_STAGE_SIZE` | int | 256 |
+| `N_LOG_WRITE_TIMEOUT_MS` | int | 6 |
+| `N_LOG_FLUSH_TIMEOUT_MS` | int | 10000 |
+| `N_LOG_FLUSH_TASK_STACK_SIZE` | int | 256 |
+| `N_LOG_FLUSH_TASK_PRIORITY` | int | 1 |
+
+等级用 `choice`（四个 bool）而不是 `int`：menuconfig 里显示 ERR/WRN/INF/DBG 更清楚，也不可能填越界；头文件里已有到 `N_WW_LOG_LEVEL_*` 的映射。
+
+> mode 那个 `choice` 块**不用动** —— Kconfig 的 `choice` 本身就保证恰好选一个，这正是需要的性质。
+
+**验证**：`menuconfig` 能正常选；旧 defconfig 不加任何新符号也能编。
 
 ---
 
@@ -125,7 +154,6 @@ cp ww_log_map.json  maps/ww_log_map_<当前map_id>.json
 | `Makefile` | 仿真专用，只移植阶段 2 的规则 |
 | `examples/main.c` | 仿真主程序 |
 | `sim/log.conf`、`sim/conf_to_autoconf.py` | 仿真专用，FW 已有等价流程 |
-| `Kconfig.fw` | 内容并进你们的 Kconfig，文件本身不用带 |
 
 ---
 

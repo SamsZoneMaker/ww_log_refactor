@@ -10,7 +10,7 @@
  * output/log_autoconf.h -- the same step the firmware build performs on its own
  * Kconfig .conf files.
  *
- * log.conf uses Kconfig .conf syntax and the symbol names from Kconfig.fw, so a
+ * log.conf uses Kconfig .conf syntax and the firmware Kconfig's symbol names, so a
  * sim config and a firmware defconfig fragment are interchangeable.
  */
 

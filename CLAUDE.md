@@ -16,7 +16,7 @@
 
 ## 1. 配置：两个正交的来源
 
-**模式 / 后端 / 阈值 —— 走 Kconfig 符号**，两边用同一套符号名（见 `Kconfig.fw`）：
+**模式 / 后端 / 阈值 —— 走 Kconfig 符号**，两边用同一套符号名（完整清单见 `sim/log.conf`；固件侧的 Kconfig 由固件工程自己维护）：
 
 | | 输入 | 转换 |
 |---|---|---|
@@ -349,7 +349,6 @@ ww_log_v2/
 │   ├── n_ww_log_storage.h   ← RAM 环 + 外存几何
 │   └── n_ww_log_task.h
 ├── log/                     ← 固件核心（control / output / ram / storage / task）
-├── Kconfig.fw               ← 固件侧 Kconfig 片段（仿真不读）
 ├── MERGE_TO_FW.md           ← 合入内网 FW 的分阶段清单
 ├── sim/                     ← PC 仿真硬件壳（DLM RAM、flash/eeprom、分区表、version.h）
 │   ├── log.conf             ← 仿真配置，Kconfig .conf 语法
