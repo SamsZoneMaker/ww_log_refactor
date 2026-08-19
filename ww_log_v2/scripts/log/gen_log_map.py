@@ -21,6 +21,11 @@ Modes:
 Options:
   --root <path>   project root used to resolve dirs in config and to anchor
                   relative file paths in the map (defaults to CWD).
+  --write <path>  write a derived artifact to <path> instead of stdout, and
+                  only if its content actually changed. Every output of this
+                  script is write-if-changed, which is what keeps a source edit
+                  (new line numbers, same file IDs) from touching file_ids.mk /
+                  auto_file_ids.h and forcing a full rebuild.
 
 The --makefile / --header modes DERIVE from an existing ww_log_map.json
 (generate it first).  Encoding tag: file12_line14_lvl2_pcnt4.
@@ -35,6 +40,24 @@ from datetime import datetime, timezone
 ENCODING_TAG = "file12_line14_lvl2_pcnt4"
 LEVELS = ("ERR", "WRN", "INF", "DBG")
 LOG_CALL_RE = re.compile(r'\bN?_?LOG_(ERR|WRN|INF|DBG)\s*\(')
+
+# Helper macros (n_ww_log_macro.h) that expand to an N_LOG_ERR with a FIXED
+# format string. __LINE__ inside a macro body expands at the INVOCATION site, so
+# these emit a real entry attributed to the .c line that used them -- without an
+# entry in the map every one of them decodes as <no map entry>.
+#   name -> (level, fmt as written in the header, param count)
+# The _WO_PRINT variants log nothing and are deliberately absent: the trailing
+# \s*\( below keeps e.g. N_RETURN_IF_TRUE_WO_PRINT( from matching the shorter
+# N_RETURN_IF_TRUE (the '_' after the name is a word char, so no '(' follows).
+HELPER_MACROS = {
+    'N_RETURN_CODE_IF_TRUE': ('ERR', r'-- line:%d rc:0x%x\r\n', 2),
+    'N_RETURN_IF_TRUE':      ('ERR', r'-- line:%d rc:0x%x\r\n', 2),
+    'N_BREAK_IF_TRUE':       ('ERR', r'rc:0x%x\r\n', 1),
+    'N_CONTINUE_IF_TRUE':    ('ERR', r'rc:0x%x\r\n', 1),
+    'N_PRINT_IF_TRUE':       ('ERR', r'rc:0x%x\r\n', 1),
+}
+HELPER_CALL_RE = re.compile(
+    r'\b(' + '|'.join(sorted(HELPER_MACROS, key=len, reverse=True)) + r')\s*\(')
 
 
 # ----------------------------------------------------------------------------
@@ -66,6 +89,58 @@ def safe_var(path):
     return path.replace('/', '_').replace('.', '_').replace('-', '_')
 
 
+def basename(path):
+    return norm(path).rsplit('/', 1)[-1]
+
+
+def disambiguate_names(paths):
+    """path -> shortest unique trailing path segment(s), for display.
+
+    A file whose basename is unique keeps just the basename (so existing STR /
+    decoder output is unchanged); only genuine collisions grow a directory:
+        src/demo/demo_init.c        -> demo_init.c
+        target/a/main.c             -> a/main.c
+        target/b/main.c             -> b/main.c
+    """
+    paths = list(paths)
+    parts = {p: norm(p).split('/') for p in paths}
+    depth = max((len(v) for v in parts.values()), default=1)
+    out, todo = {}, set(paths)
+
+    for n in range(1, depth + 1):
+        groups = {}
+        for p in todo:
+            groups.setdefault('/'.join(parts[p][-n:]), []).append(p)
+        for cand, group in groups.items():
+            if len(group) == 1:
+                out[group[0]] = cand
+        todo -= set(out)
+        if not todo:
+            break
+    for p in todo:                       # identical full paths: cannot happen
+        out[p] = norm(p)
+    return out
+
+
+def write_if_changed(path, text):
+    """Write `text` to `path` only when it differs from what is already there.
+
+    Keeping the mtime stable when the content is unchanged is what stops a
+    source edit (which moves line numbers but no file IDs) from invalidating
+    every object file -- see the Makefile's incremental-build notes.
+    Returns True if the file was actually rewritten.
+    """
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            if f.read() == text:
+                return False
+    except (OSError, UnicodeDecodeError):
+        pass
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    return True
+
+
 # ----------------------------------------------------------------------------
 # scanning
 # ----------------------------------------------------------------------------
@@ -82,27 +157,31 @@ def module_of(path, modules):
     return best_name
 
 
-def scan_c_files(modules, root='.'):
-    """Return {path: module_name} for every .c under any module dir.
+def scan_files(modules, root='.', suffix='.c'):
+    """Return {path: module_name} for every *suffix* file under any module dir.
 
     Paths in the returned dict are relative to *root* so they stay stable
     regardless of where the script is invoked from.
     """
     found = {}
     root = os.path.abspath(root)
-    for name, info in modules.items():
+    for _name, info in modules.items():
         for d in info.get('dirs', []):
             d_abs = os.path.normpath(os.path.join(root, d))
             if not os.path.isdir(d_abs):
                 continue
             for walk_root, _dirs, files in os.walk(d_abs):
                 for fn in files:
-                    if fn.endswith('.c'):
+                    if fn.endswith(suffix):
                         abs_p = os.path.join(walk_root, fn)
                         p = norm(os.path.relpath(abs_p, root))
                         # assign by longest prefix (handles overlapping dirs)
                         found[p] = module_of(p, modules)
     return found
+
+
+def scan_c_files(modules, root='.'):
+    return scan_files(modules, root, '.c')
 
 
 def split_top_level_args(s):
@@ -218,8 +297,54 @@ def extract_entries(path, file_id):
 
         entries.append({"file_id": file_id, "line": line,
                         "level": level, "fmt": fmt})
+
+    # Helper macros expand to an N_LOG_ERR with a fixed fmt at the invocation
+    # line, so synthesise their entries from the table rather than the source.
+    for m in HELPER_CALL_RE.finditer(text):
+        level, fmt, _pcnt = HELPER_MACROS[m.group(1)]
+        line = text.count('\n', 0, m.start()) + 1
+        entries.append({"file_id": file_id, "line": line,
+                        "level": level, "fmt": fmt, "via": m.group(1)})
+
+    # Two log-producing constructs on one line collapse to the same (file_id,
+    # line) key and cannot be told apart at decode time.
+    seen = {}
+    for e in entries:
+        if e["line"] in seen:
+            print("Warning: %s:%d two log calls share one line -> decode is "
+                  "ambiguous (%r vs %r)"
+                  % (path, e["line"], seen[e["line"]]["fmt"], e["fmt"]),
+                  file=sys.stderr)
+        seen[e["line"]] = e
+
     entries.sort(key=lambda e: (e["file_id"], e["line"]))
     return entries
+
+
+def warn_header_logs(paths, root):
+    """Warn about log calls in .h files -- they cannot be mapped.
+
+    A log inside a header (typically a `static inline`) is expanded once per
+    including .c, so it emits the INCLUDING file's CURRENT_FILE_ID paired with
+    the HEADER's line number. One source line therefore produces a different
+    file_id per includer, and that line number can also collide with a real
+    entry of the including .c. Neither is representable in the (file_id, line)
+    map, so the honest answer is to flag it rather than emit wrong entries.
+    """
+    for path in sorted(paths):
+        try:
+            with open(os.path.join(root, path), 'r', encoding='utf-8',
+                      errors='replace') as f:
+                text = f.read()
+        except OSError:
+            continue
+        hits = sorted(set(
+            [text.count('\n', 0, m.start()) + 1 for m in LOG_CALL_RE.finditer(text)] +
+            [text.count('\n', 0, m.start()) + 1 for m in HELPER_CALL_RE.finditer(text)]))
+        for line in hits:
+            print("Warning: %s:%d log call in a header cannot be decoded "
+                  "(expanded per includer -> ambiguous file_id/line)"
+                  % (path, line), file=sys.stderr)
 
 
 # ----------------------------------------------------------------------------
@@ -284,6 +409,16 @@ def generate(config, old_map, root='.'):
         print("Warning: %s not under any module dir -> logs disabled" % path,
               file=sys.stderr)
 
+    # Logs inside headers cannot be represented in this map -- flag them.
+    warn_header_logs(scan_files(modules, root, '.h'), root)
+
+    # Display name: basename when unique, otherwise the shortest unique path
+    # tail. Consumed by the decoder (readable output) and by the Makefile
+    # (STR mode's __NOTDIR_FILE__), so both agree on one name per file.
+    shorts = disambiguate_names([info["path"] for info in files.values()])
+    for info in files.values():
+        info["short"] = shorts[info["path"]]
+
     # --- entries (scan present files only) ---
     entries = []
     for fid in sorted(files):
@@ -338,6 +473,10 @@ def emit_makefile(config, the_map):
         lines.append("FILE_ID_%s = %d" % (v, fid))
         lines.append("MODULE_ID_%s = %d" % (v, mid))
         lines.append("MODULE_STATIC_EN_%s = 1" % v)
+        # STR mode prints this instead of $(notdir $<): identical to the
+        # basename unless two sources share one, in which case it carries just
+        # enough directory to stay unambiguous.
+        lines.append("SHORT_NAME_%s = %s" % (v, info.get('short', basename(path))))
         n_en += 1
     lines.append("")
     lines.append("# Summary: %d files enabled, %d disabled" % (n_en, n_dis))
@@ -397,28 +536,42 @@ def main():
     if "--out" in flags:
         map_path = flags[flags.index("--out") + 1]
 
-    if "--makefile" in flags:
+    # --write <path> sends a derived artifact to a file instead of stdout, and
+    # leaves the file (and its mtime) alone when the content is unchanged.
+    write_to = flags[flags.index("--write") + 1] if "--write" in flags else None
+
+    def emit(text):
+        if write_to is None:
+            print(text)
+        elif write_if_changed(write_to, text + '\n'):
+            print("Updated %s" % write_to, file=sys.stderr)
+
+    if "--makefile" in flags or "--header" in flags:
         the_map = load_json(map_path)
         if the_map is None:
             sys.exit("Error: %s missing; run generate first" % map_path)
-        print(emit_makefile(config, the_map))
-        return
-    if "--header" in flags:
-        the_map = load_json(map_path)
-        if the_map is None:
-            sys.exit("Error: %s missing; run generate first" % map_path)
-        print(emit_header(config, the_map))
+        emit(emit_makefile(config, the_map) if "--makefile" in flags
+             else emit_header(config, the_map))
         return
 
     # default: scan + (re)generate map
     old_map = load_json(map_path)
     new_map = generate(config, old_map, root)
-    with open(map_path, 'w', encoding='utf-8') as f:
-        json.dump(new_map, f, indent=2, ensure_ascii=False)
-        f.write('\n')
-    print("Generated %s: %d files, %d entries"
-          % (map_path, len(new_map['files']), len(new_map['entries'])),
-          file=sys.stderr)
+
+    # Keep build_time from the old map when nothing else changed, so a rebuild
+    # that found no source change does not churn the file (and its git diff).
+    if old_map is not None:
+        probe = dict(new_map)
+        probe["meta"] = dict(new_map["meta"],
+                             build_time=old_map.get("meta", {}).get("build_time", ""))
+        if probe == old_map:
+            new_map = probe
+
+    text = json.dumps(new_map, indent=2, ensure_ascii=False) + '\n'
+    if write_if_changed(map_path, text):
+        print("Generated %s: %d files, %d entries"
+              % (map_path, len(new_map['files']), len(new_map['entries'])),
+              file=sys.stderr)
 
 
 if __name__ == '__main__':

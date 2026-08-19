@@ -164,16 +164,56 @@ def basename(path):
     return path.replace('\\', '/').rsplit('/', 1)[-1]
 
 
+def short_names(files):
+    """file_id -> display name. Prefer the map's precomputed 'short' (the same
+    name STR mode prints); fall back to disambiguating here so older maps, which
+    have no 'short' field, still do not print two different files as 'main.c'."""
+    have = {fid: info['short'] for fid, info in files.items() if info.get('short')}
+    todo = {fid: info['path'] for fid, info in files.items() if fid not in have}
+    if not todo:
+        return have
+
+    parts = {fid: p.replace('\\', '/').split('/') for fid, p in todo.items()}
+    depth = max((len(v) for v in parts.values()), default=1)
+    for n in range(1, depth + 1):
+        groups = {}
+        for fid in list(todo):
+            groups.setdefault('/'.join(parts[fid][-n:]), []).append(fid)
+        for cand, group in groups.items():
+            if len(group) == 1:
+                have[group[0]] = cand
+                del todo[group[0]]
+        if not todo:
+            break
+    for fid, p in todo.items():
+        have[fid] = p
+    return have
+
+
+# C escapes that can appear inside a format string. The map stores fmt exactly
+# as written in the source, so "rc:0x%x\r\n" arrives as literal backslash-r-
+# backslash-n; render them as the characters they stand for and drop the
+# trailing line break (the decoder emits one line per entry itself).
+_ESCAPES = (('\\\\', '\x00'), ('\\r', '\r'), ('\\n', '\n'), ('\\t', '\t'),
+            ('\\"', '"'), ("\\'", "'"), ('\\0', '\0'))
+
+
+def unescape(fmt):
+    for src, dst in _ESCAPES:
+        fmt = fmt.replace(src, dst)
+    return fmt.replace('\x00', '\\').rstrip('\r\n')
+
+
 def build_index(the_map):
     entries = {(e['file_id'], e['line']): e for e in the_map.get('entries', [])}
     files = {int(k): v for k, v in the_map.get('files', {}).items()}
     modules = {int(k): v for k, v in the_map.get('modules', {}).items()}
-    return entries, files, modules
+    return entries, files, modules, short_names(files)
 
 
 def format_frame(header, params, idx):
     """Turn one (header, params) frame into a readable line via the map index."""
-    entries, files, modules = idx
+    entries, _files, _modules, names = idx
 
     if header == FLUSH_MARKER:                 # ext flush-batch boundary
         tick = params[0] if params else 0
@@ -183,8 +223,7 @@ def format_frame(header, params, idx):
     params = params[:pcnt]
     lvl = LEVEL_NAMES[level]   # level comes straight from the encoded header
 
-    finfo = files.get(file_id)
-    fname = basename(finfo['path']) if finfo else 'file_id_%d' % file_id
+    fname = names.get(file_id, 'file_id_%d' % file_id)
 
     entry = entries.get((file_id, line))
     if entry is None:
@@ -193,7 +232,7 @@ def format_frame(header, params, idx):
                    ' '.join('0x%08X' % p for p in params)))
 
     return "[%s] %s:%d - %s" % (lvl, fname, line,
-                                render_fmt(entry.get('fmt', ''), params))
+                                render_fmt(unescape(entry.get('fmt', '')), params))
 
 
 # ----------------------------------------------------------------------------

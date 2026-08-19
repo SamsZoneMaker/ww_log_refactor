@@ -1,7 +1,7 @@
 {
   "meta": {
     "version": "",
-    "build_time": "2026-07-08T03:31:06Z",
+    "build_time": "2026-08-19T04:52:01Z",
     "encoding": "file12_line14_lvl2_pcnt4"
   },
   "modules": {
@@ -22,22 +22,26 @@
     "128": {
       "path": "src/demo/demo_init.c",
       "module": "DEMO",
-      "present": true
+      "present": true,
+      "short": "demo_init.c"
     },
     "129": {
       "path": "src/demo/demo_process.c",
       "module": "DEMO",
-      "present": true
+      "present": true,
+      "short": "demo_process.c"
     },
     "256": {
       "path": "src/test/test_log.c",
       "module": "TEST",
-      "present": true
+      "present": true,
+      "short": "test_log.c"
     },
     "512": {
       "path": "src/drivers/drv_uart.c",
       "module": "DRIVERS",
-      "present": true
+      "present": true,
+      "short": "drv_uart.c"
     }
   },
   "entries": [

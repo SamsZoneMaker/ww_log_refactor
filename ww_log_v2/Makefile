@@ -63,20 +63,42 @@ SIM_IMPL_SRCS = \
     sim/sim_dlm_ram.c \
     sim/sim_ext_storage.c
 
-# Registered source dirs (scanned by gen_log_map.py)
-LOG_SRCS = $(wildcard src/demo/*.c src/drivers/*.c src/test/*.c)
+# Registered source dirs (scanned by gen_log_map.py). Walked recursively, the
+# same way the generator does -- a plain src/demo/*.c wildcard would hand a
+# file_id to src/demo/sub/x.c and then never compile it.
+LOG_SRC_ROOTS = src/demo src/drivers src/test
+LOG_SRCS = $(shell find $(LOG_SRC_ROOTS) -name '*.c' 2>/dev/null)
+# The directories themselves are prerequisites too: a DELETED source drops out
+# of $(LOG_SRCS), leaving nothing newer than file_ids.mk, so the map would keep
+# listing it as present. A directory's mtime moves when an entry is added or
+# removed, which catches exactly that case.
+LOG_SRC_DIRS = $(shell find $(LOG_SRC_ROOTS) -type d 2>/dev/null)
 
 ALL_SRCS = $(LOG_MODULE_SRCS) $(SIM_IMPL_SRCS) $(LOG_SRCS) examples/main.c
 
 OBJS = $(ALL_SRCS:%.c=$(OUT_DIR)/%.o)
 
 # ---- Map + derived artifacts -----------------------------------------------
-$(FILE_IDS_MK): $(LOG_CONFIG) $(GEN) $(LOG_SRCS)
+# Rebuild scope matters here. Editing a source file moves LINE NUMBERS (which
+# only the decoder cares about, via ww_log_map.json) but not FILE IDS (which
+# are injected with -D and so do affect every object). Those two must not share
+# one timestamp, or every keystroke costs a full rebuild:
+#
+#   file_ids.mk   regenerated on every scan, always touched -> safe to -include
+#                 (a target that keeps an older mtime than its prerequisite
+#                 makes GNU make restart forever). NOTHING compiles against it.
+#   auto_file_ids.h  written ONLY when its content changed, i.e. only when a
+#                 file was added/removed or a module ID moved. This is what the
+#                 objects depend on, so an ordinary source edit rebuilds just
+#                 that one object.
+$(FILE_IDS_MK): $(LOG_CONFIG) $(GEN) $(LOG_SRCS) $(LOG_SRC_DIRS)
 	@mkdir -p $(OUT_DIR)
 	@echo "[GEN ] $(WW_LOG_MAP)"
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
-	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header   > $(AUTO_HEADER)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
+
+$(AUTO_HEADER): $(FILE_IDS_MK)
 
 -include $(FILE_IDS_MK)
 
@@ -85,7 +107,7 @@ map: $(LOG_CONFIG) $(GEN)
 	@mkdir -p $(OUT_DIR)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
-	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header   > $(AUTO_HEADER)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
 	@echo "Map regenerated."
 
 # ---- Build -----------------------------------------------------------------
@@ -99,24 +121,30 @@ $(TARGET): $(OBJS)
 	@$(CC) $(OBJS) -o $@ $(LDFLAGS)
 
 # Per-file compile with file_id / module_id / static-enable injection.
-$(OUT_DIR)/%.o: %.c $(FILE_IDS_MK)
+# Depends on AUTO_HEADER (write-if-changed) rather than FILE_IDS_MK (always
+# touched) so only a real ID change forces a recompile -- see the note above.
+# __NOTDIR_FILE__ takes the generator's disambiguated short name, which equals
+# $(notdir $<) unless two sources share a basename (several target/*/main.c);
+# STR mode has no file_id to fall back on, so those must not print alike.
+$(OUT_DIR)/%.o: %.c $(AUTO_HEADER)
 	@mkdir -p $(dir $@)
 	@echo "[CC  ] $<"
 	$(eval V  := $(subst /,_,$(subst .,_,$<)))
 	$(eval FID := $(FILE_ID_$(V)))
 	$(eval MID := $(MODULE_ID_$(V)))
 	$(eval SEN := $(MODULE_STATIC_EN_$(V)))
+	$(eval SHORT := $(or $(SHORT_NAME_$(V)),$(notdir $<)))
 	@if [ -n "$(FID)" ]; then \
 		$(CC) $(CFLAGS) \
 			-DCURRENT_FILE_ID=$(FID) \
 			-DCURRENT_MODULE_ID=$(MID) \
 			-DCURRENT_MODULE_STATIC_EN=$(SEN) \
-			-D__NOTDIR_FILE__=\"$(notdir $<)\" \
+			-D__NOTDIR_FILE__=\"$(SHORT)\" \
 			-MMD -MP -c $< -o $@; \
 	else \
 		$(CC) $(CFLAGS) \
 			-DCURRENT_MODULE_STATIC_EN=0 \
-			-D__NOTDIR_FILE__=\"$(notdir $<)\" \
+			-D__NOTDIR_FILE__=\"$(SHORT)\" \
 			-MMD -MP -c $< -o $@; \
 	fi
 
