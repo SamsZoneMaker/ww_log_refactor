@@ -114,8 +114,14 @@ int main(void)
     printf("Partition: %u B (8B 'XLOG' header + append stream), write_off=0x%X\n",
            (unsigned)log_ext_get_log_size(), log_ext_get_write_offset());
 
-    /* Generate a burst; only ERR/WRN entries are persisted to ext by default. */
+    /* Generate a burst; only ERR/WRN entries are persisted to ext by default,
+     * so mix in a few ERR-producing calls -- otherwise the dumped archive is
+     * empty and there is nothing to demonstrate decoding on. */
     demo_burst(400);
+    for (int e = 0; e < 5; e++)
+    {
+        demo_process(-1);          /* takes the LOG_ERR + early-return path */
+    }
 
     /* The sim has no running flush task, so drain explicitly. */
     {
@@ -137,6 +143,7 @@ int main(void)
     }
 
     sim_ext_dump_partition("ext_dump.bin");
+    sim_ext_dump_chip("ext_chip.bin");   /* whole device, partition table included */
     printf("Ext LOG partition dumped -> ext_dump.bin (decode with log_decoder.py)\n");
 #endif
 

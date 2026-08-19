@@ -25,13 +25,21 @@
 
 /* Mutex acquire timeout for the (RAM-backend) writer path. Lives outside the
  * EXT_MEM guard because log_mutex_lock() is compiled whenever RAM is on. */
+#ifndef LOG_WRITE_TIMEOUT_MS
 #define LOG_WRITE_TIMEOUT_MS         (6)
+#endif
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
+#ifndef LOG_FLUSH_TASK_STACK_SIZE
 #define LOG_FLUSH_TASK_STACK_SIZE    (256)
+#endif
+#ifndef LOG_FLUSH_TASK_PRIORITY
 #define LOG_FLUSH_TASK_PRIORITY      (1)
+#endif
+#ifndef LOG_FLUSH_TIMEOUT_MS
 #define LOG_FLUSH_TIMEOUT_MS         (10000)
+#endif
 
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 /*************************** macro definition end *****************************/

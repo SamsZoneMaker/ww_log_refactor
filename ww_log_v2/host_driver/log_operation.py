@@ -78,9 +78,13 @@ EXT_PART_HDR_SIZE = 8
 # Default read window when the caller does not pass an explicit length: the
 # whole LOG region of each source. Reading a superset is fine -- the magic
 # auto-scan locates the real container inside it.
-RAM_LOG_SIZE     = 4096            # DLM maintain region
-FLASH_LOG_SIZE   = 4096            # flash LOG partition (4KB)
-EEPROM_LOG_SIZE  = 21 * 1024       # eeprom LOG partition (21KB)
+# Used only when the partition table cannot be read; the geometry normally
+# comes from the table itself, exactly as the firmware gets it.
+RAM_LOG_SIZE     = 4096            # DLM maintain region (not a partition)
+FLASH_LOG_SIZE   = 4096            # flash LOG partition fallback (4KB)
+EEPROM_LOG_SIZE  = 21 * 1024       # eeprom LOG partition fallback (21KB)
+FLASH_LOG_OFFSET_FALLBACK  = 0x1F000
+EEPROM_LOG_OFFSET_FALLBACK = 0x1AA00
 DEFAULT_READ_LEN = RAM_LOG_SIZE    # back-compat default
 
 # "Unwritten" fill byte per medium: RAM powers up / clears to 0x00, NOR flash
@@ -98,6 +102,67 @@ SPEC_RE = re.compile(
     r'(hh|h|ll|l|L|z|j|t)?'      # length modifier
     r'([diouxXeEfFgGcspn%])'     # conversion
 )
+
+
+# ----------------------------------------------------------------------------
+# Partition table
+# ----------------------------------------------------------------------------
+# The firmware does NOT hardcode where the LOG partition lives -- log_ext_mem_init()
+# reads the partition table and takes part_offset/part_size from the LOG entry
+# (n_ww_log_storage.c). The host used to hardcode both, so a device whose LOG
+# partition moved or was resized got read at the wrong offset, or truncated.
+# Parsing the same table here keeps one source of truth.
+#
+# !! VERIFY AGAINST THE REAL FIRMWARE BEFORE TRUSTING ON HARDWARE !!
+# The layout below mirrors sim/init_ex.h, which is the simulator's stand-in and
+# was written from the field names n_ww_log_storage.c uses -- the magic and the
+# LOG type id in particular are placeholders. Correct these four constants and
+# everything downstream follows; nothing else encodes the layout.
+PT_MAGIC          = 0x50415254      # 'PART'
+PT_ENTRY_TYPE_LOG = 8
+PT_HDR_FMT        = '<IIIIHH'       # magic, version, product, ptableSize, pentryNum, rsv
+PT_ENTRY_FMT      = '<BBBBII'       # part_type, part_id, slot_id, rsv, offset, size
+PT_HDR_SIZE       = struct.calcsize(PT_HDR_FMT)      # 20
+PT_ENTRY_SIZE     = struct.calcsize(PT_ENTRY_FMT)    # 12
+PT_MAX_ENTRIES    = 16
+PT_SCAN_LIMIT     = 64 * 1024       # how far into a blob to look for the table
+
+
+def parse_partition_table(blob, off=None):
+    """Parse the partition table found in `blob` -> list of entry dicts.
+
+    With `off` omitted the magic is searched for, so a dump that starts at an
+    arbitrary offset (or a whole-chip image) still works. Returns [] when no
+    plausible table is present -- callers then fall back to explicit offsets.
+    """
+    if off is None:
+        off = blob.find(struct.pack('<I', PT_MAGIC), 0, PT_SCAN_LIMIT)
+        if off < 0:
+            return []
+    if off + PT_HDR_SIZE > len(blob):
+        return []
+
+    magic, _ver, _prod, _size, n, _rsv = struct.unpack_from(PT_HDR_FMT, blob, off)
+    if magic != PT_MAGIC or not (0 < n <= PT_MAX_ENTRIES):
+        return []
+
+    out = []
+    for i in range(n):
+        eoff = off + PT_HDR_SIZE + i * PT_ENTRY_SIZE
+        if eoff + PT_ENTRY_SIZE > len(blob):
+            break
+        ptype, pid, slot, _r, poff, psize = struct.unpack_from(PT_ENTRY_FMT, blob, eoff)
+        out.append({'type': ptype, 'id': pid, 'slot': slot,
+                    'offset': poff, 'size': psize})
+    return out
+
+
+def find_log_partition(blob, off=None):
+    """(offset, size) of the LOG partition from a partition table, or None."""
+    for e in parse_partition_table(blob, off):
+        if e['type'] == PT_ENTRY_TYPE_LOG and e['size'] > 0:
+            return e['offset'], e['size']
+    return None
 
 
 # ----------------------------------------------------------------------------
@@ -573,6 +638,28 @@ class Log:
             _save_output(output, data, decoded_lines)
         return frames
 
+    # --- partition geometry from the device --------------------------------
+
+    def f_log_partition(self, reader, scan_len=PT_SCAN_LIMIT):
+        """(offset, size) of the LOG partition read from the device's partition
+        table, or None. `reader` is one of the _read_* methods.
+
+        The firmware takes its geometry from this table rather than a constant,
+        so the host reading the same table is what keeps the two in step across
+        a repartition or a resize.
+        """
+        try:
+            blob = reader(0, scan_len)
+        except Exception as e:                     # noqa: BLE001 - device I/O
+            print("# partition table read failed (%s); using explicit offsets" % e)
+            return None
+        part = find_log_partition(blob)
+        if part is None:
+            print("# no partition table found; using explicit offsets")
+            return None
+        print("# partition table: LOG at 0x%X, %u bytes" % part)
+        return part
+
     # --- public ------------------------------------------------------------
 
     def f_decode_ram(self, addr, length=RAM_LOG_SIZE, raw=False,
@@ -582,16 +669,41 @@ class Log:
         data = self._read_ram(addr, length)
         return self._decode_blob(data, raw, output, RAM_FILL_BYTE, hex_only)
 
-    def f_decode_flash(self, offset=0x0, length=FLASH_LOG_SIZE,
+    def f_decode_flash(self, offset=None, length=None,
                        raw=False, output=None, hex_only=False):
-        """Read + decode (or hex-dump) the LOG partition from flash at `offset`."""
+        """Read + decode (or hex-dump) the LOG partition from flash.
+
+        With no explicit offset/length the geometry comes from the device's
+        partition table (what the firmware itself uses); the arguments override
+        it for a device whose table cannot be read.
+        """
+        if offset is None or length is None:
+            part = self.f_log_partition(self._read_flash)
+            if part is not None:
+                offset = part[0] if offset is None else offset
+                length = part[1] if length is None else length
+        offset = FLASH_LOG_OFFSET_FALLBACK if offset is None else offset
+        length = FLASH_LOG_SIZE if length is None else length
         print(f"Reading {length} bytes from flash LOG @ 0x{offset:X} ...")
         data = self._read_flash(offset, length)
         return self._decode_blob(data, raw, output, EXT_FILL_BYTE, hex_only)
 
-    def f_decode_eeprom(self, offset=0x0, length=EEPROM_LOG_SIZE,
+    def f_decode_eeprom(self, offset=None, length=None,
                         devAddr=None, raw=False, output=None, hex_only=False):
-        """Read + decode (or hex-dump) the LOG partition from EEPROM at `offset`."""
+        """Read + decode (or hex-dump) the LOG partition from EEPROM.
+
+        With no explicit offset/length the geometry comes from the device's
+        partition table (what the firmware itself uses); the arguments override
+        it for a device whose table cannot be read.
+        """
+        if offset is None or length is None:
+            part = self.f_log_partition(
+                lambda o, n: self._read_eeprom(o, n, devAddr))
+            if part is not None:
+                offset = part[0] if offset is None else offset
+                length = part[1] if length is None else length
+        offset = EEPROM_LOG_OFFSET_FALLBACK if offset is None else offset
+        length = EEPROM_LOG_SIZE if length is None else length
         print(f"Reading {length} bytes from eeprom LOG @ 0x{offset:X} ...")
         data = self._read_eeprom(offset, length, devAddr)
         return self._decode_blob(data, raw, output, EXT_FILL_BYTE, hex_only)

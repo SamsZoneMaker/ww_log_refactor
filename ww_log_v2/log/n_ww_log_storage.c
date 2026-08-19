@@ -20,6 +20,7 @@
 #include "log/n_ww_log_storage.h"
 #include "log/n_ww_log_macro.h"    /* N_RETURN_*_IF_TRUE + (via def) encode accessors */
 #include "log/n_ww_log_task.h"
+#include "log/n_ww_log_api.h"     /* n_ww_log_write_boot_record */
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
@@ -104,6 +105,29 @@ static int ext_partition_erase(void)
         return WW_OK;
     }
     return WW_ERR;
+}
+
+/* Length of the longest whole-entry prefix of `buf` that fits in `limit`.
+ * Entries are self-describing (4 + pcnt*4), and control records are ordinary
+ * entries, so this walks the staged batch uniformly. Used only when the
+ * partition is about to fill: the append stream must never end mid-entry, or
+ * the cold-boot scan and the host decoder would both mis-parse the tail. */
+static U16 ext_whole_entry_prefix(const U8 *buf, U16 len, U16 limit)
+{
+    U16 off = 0;
+
+    while (off + 4 <= len)
+    {
+        U32 hdr = *(const U32 *)(buf + off);
+        U16 esz = (U16)(4 + (U16)N_WW_LOG_PCNT_OF(hdr) * 4);
+
+        if (off + esz > len || off + esz > limit)
+        {
+            break;
+        }
+        off += esz;
+    }
+    return off;
 }
 
 /* Write the 8B partition header at the partition base. Called once when the
@@ -342,6 +366,9 @@ int log_ext_mem_clear(void)
     g_log_ext_ctx.full = WW_FALSE;
 
     ww_printf("[LOG][EXT]: Clear done\n");
+    /* No boot record needed here: the flush path stamps one ahead of the first
+     * batch an empty archive receives, so the identity is re-established the
+     * moment there is anything to attribute -- and only then. */
     return LOG_EXT_OK;
 }
 
@@ -380,7 +407,8 @@ int log_ram_flush(void)
 {
     static U8 stage[LOG_EXT_FLUSH_STAGE_SIZE];
     U16 packed, consumed;
-    U16 lead = 0;                 /* marker bytes prepended ahead of `packed` */
+    U16 lead = 0;                 /* control-record bytes ahead of `packed` */
+    U16 boot_lead = 0;            /* boot record, when the archive is empty   */
     U16 total;                    /* lead + packed: what actually hits the device */
     U32 dst_off = 0, end, avail;
     int need_erase = 0;
@@ -405,13 +433,27 @@ int log_ram_flush(void)
         return LOG_EXT_ERR_PT_FULL;   /* FREEZE: archive frozen, keep earliest */
     }
 
+#ifdef CONFIG_N_LOG_MODE_ENCODE
+    /* An archive holding entries but no boot record cannot be attributed to a
+     * map, so stamp one ahead of the first batch a fresh archive receives.
+     * Doing it here rather than at init/clear time makes it an invariant of the
+     * writer: whatever emptied the archive, and whatever happened to the RAM
+     * ring afterwards, the first entries to land carry their identity. */
+    if (g_log_ext_ctx.write_off ==
+            g_log_ext_ctx.log_offset + LOG_EXT_PART_HDR_SIZE)
+    {
+        boot_lead = N_WW_LOG_BOOT_RECORD_SIZE;
+        lead = boot_lead;
+    }
+#endif
+
 #ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
-    /* If a marker is armed for this drain, reserve its 8 bytes at the front of the
-     * stage buffer; it is only committed below once we know packed > 0 (so an
-     * all-filtered flush never emits a lone marker and cannot spam the archive). */
+    /* If a marker is armed for this drain, reserve its 8 bytes too; both leads
+     * are only committed below once we know packed > 0, so an all-filtered
+     * flush never emits lone control records and cannot spam the archive. */
     if (s_flush_marker_due)
     {
-        lead = LOG_EXT_FLUSH_MARKER_SIZE;
+        lead += LOG_EXT_FLUSH_MARKER_SIZE;
     }
 #endif
 
@@ -426,19 +468,29 @@ int log_ram_flush(void)
         return LOG_EXT_OK;            /* nothing walkable */
     }
 
-#ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
-    if (lead != 0 && packed != 0)
+    if (packed == 0)
     {
-        /* Data-bearing batch: stamp the reserved marker and disarm. */
-        ((U32 *)stage)[0] = LOG_EXT_FLUSH_MARKER_HDR;
-        ((U32 *)stage)[1] = (U32)xTaskGetTickCount();
-        s_flush_marker_due = 0;
+        lead = 0;                    /* all filtered: drop the reservations */
+        boot_lead = 0;
     }
     else
     {
-        lead = 0;                    /* all filtered: drop the reservation */
-    }
+#ifdef CONFIG_N_LOG_MODE_ENCODE
+        if (boot_lead != 0)
+        {
+            (void)n_ww_log_fill_boot_record(stage);
+        }
 #endif
+#ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
+        if (s_flush_marker_due)
+        {
+            U32 *m = (U32 *)(stage + boot_lead);
+            m[0] = LOG_EXT_FLUSH_MARKER_HDR;
+            m[1] = (U32)xTaskGetTickCount();
+            s_flush_marker_due = 0;
+        }
+#endif
+    }
     total = lead + packed;
 
     /* Does the persisted batch (marker + entries) fit before the partition end? */
@@ -448,12 +500,26 @@ int log_ram_flush(void)
     if (total > avail)
     {
 #ifdef CONFIG_N_LOG_EXT_FULL_FREEZE
-        /* Freeze: keep what is already persisted; drop these newest entries but
-         * still consume them from RAM so the ring keeps rolling for UART. */
+        /* Freeze: this is the last batch the partition will take. Fill the tail
+         * with as many WHOLE entries as still fit instead of discarding the
+         * batch wholesale -- dropping it would strand up to one staging buffer
+         * (255 B) of unused partition. Whatever does not fit is still consumed
+         * from RAM so the ring keeps rolling for UART. */
+        total = ext_whole_entry_prefix(stage, total, (U16)avail);
         g_log_ext_ctx.full = WW_TRUE;
+        log_ram_set_ext_full();
+        if (total == 0)
+        {
+            log_ram_consume(consumed);
+            log_mutex_unlock();
+            return LOG_EXT_ERR_PT_FULL;
+        }
+        dst_off = g_log_ext_ctx.write_off;
+        g_log_ext_ctx.write_off += total;
         log_ram_consume(consumed);
         log_mutex_unlock();
-        return LOG_EXT_ERR_PT_FULL;
+        ret = ext_dev_write(dst_off, stage, total);
+        return (ret == WW_OK) ? LOG_EXT_ERR_PT_FULL : LOG_EXT_ERR_WRITE_FAIL;
 #else
         /* Erase: wipe + restart the stream, keeping these newest entries. The
          * device erase is deferred to outside the lock. */

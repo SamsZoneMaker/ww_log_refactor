@@ -58,6 +58,10 @@ U8 g_ww_log_level_threshold = N_WW_LOG_LEVEL_DBG; /* allow all by default */
 
 /*************************** static function start ***************************/
 /* to be used only in this file */
+/*************************** static function end *****************************/
+
+
+/*************************** global function start ***************************/
 
 #ifdef CONFIG_N_LOG_MODE_ENCODE
 /**
@@ -79,7 +83,7 @@ U8 g_ww_log_level_threshold = N_WW_LOG_LEVEL_DBG; /* allow all by default */
  * first -- so those stragglers stay attributed to the PREVIOUS boot record,
  * which is where they belong.
  */
-static void log_write_boot_record(void)
+void n_ww_log_write_boot_record(void)
 {
     U32 params[N_WW_LOG_BOOT_RECORD_PCNT];
 
@@ -90,12 +94,27 @@ static void log_write_boot_record(void)
     ww_log_backend_emit(N_WW_LOG_BOOT_RECORD_HDR, params,
                         N_WW_LOG_BOOT_RECORD_PCNT, N_WW_LOG_LEVEL_ERR);
 }
+
+/**
+ * @brief Serialise a boot record into `dst` (N_WW_LOG_BOOT_RECORD_SIZE bytes).
+ * @return bytes written.
+ * @note Used by the flush path to stamp an EMPTY archive before its first
+ *       entries, which is what makes "entries in the archive are always
+ *       preceded by a boot record" an invariant of the writer rather than
+ *       something that depends on init ordering (a wipe followed by a RAM ring
+ *       clear would otherwise drop the stamp before it was ever flushed).
+ */
+U16 n_ww_log_fill_boot_record(U8 *dst)
+{
+    U32 *w = (U32 *)dst;
+
+    w[0] = (U32)N_WW_LOG_BOOT_RECORD_HDR;
+    w[1] = (U32)N_WW_LOG_MAP_ID;
+    w[2] = (U32)BUILD_VERSION;
+    w[3] = (U32)BUILD_GIT_ID;
+    return N_WW_LOG_BOOT_RECORD_SIZE;
+}
 #endif /* CONFIG_N_LOG_MODE_ENCODE */
-
-/*************************** static function end *****************************/
-
-
-/*************************** global function start ***************************/
 
 /**
  * @brief Get current log level threshold
@@ -216,7 +235,7 @@ void n_ww_log_init(void)
 #ifdef CONFIG_N_LOG_MODE_ENCODE
     /* After the ring exists, before the application logs anything: everything
      * that follows in the stream belongs to this firmware build. */
-    log_write_boot_record();
+    n_ww_log_write_boot_record();
 #endif
 }
 

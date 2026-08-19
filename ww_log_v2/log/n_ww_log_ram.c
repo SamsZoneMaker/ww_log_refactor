@@ -229,7 +229,9 @@ WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count)
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
     header->pending_len += required;
-    if (log_ram_is_need_flush() == WW_TRUE)
+    /* Once the archive is frozen the flush task can only wake up and bail, so
+     * stop signalling it; the ring keeps rolling for UART and RAM dumps. */
+    if (log_ram_is_need_flush() == WW_TRUE && log_ext_mem_is_full() != WW_TRUE)
     {
         log_flush_notify();
     }
@@ -251,6 +253,22 @@ void log_ram_mark_error(void)
     g_ram_buffer.header->flags |= LOG_FLAG_ERROR;
     g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
 }
+
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
+/**
+ * @brief Record that the external archive filled up (FREEZE policy).
+ *        Kept in the RAM header rather than only in the ext ctx so it reaches a
+ *        RAM dump and survives the cold boot that discards the ctx -- without
+ *        it, an archive that stops mid-way looks the same as a device that
+ *        simply stopped logging.
+ * @note  Caller already holds the log mutex (flush path).
+ */
+void log_ram_set_ext_full(void)
+{
+    g_ram_buffer.header->flags |= LOG_FLAG_EXT_FULL;
+    g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
+}
+#endif
 
 /**
  * @brief Structural integrity check of the data area (not just the header).

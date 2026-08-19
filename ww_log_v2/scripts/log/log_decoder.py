@@ -94,6 +94,67 @@ SPEC_RE = re.compile(
 
 
 # ----------------------------------------------------------------------------
+# Partition table
+# ----------------------------------------------------------------------------
+# The firmware does NOT hardcode where the LOG partition lives -- log_ext_mem_init()
+# reads the partition table and takes part_offset/part_size from the LOG entry
+# (n_ww_log_storage.c). The host used to hardcode both, so a device whose LOG
+# partition moved or was resized got read at the wrong offset, or truncated.
+# Parsing the same table here keeps one source of truth.
+#
+# !! VERIFY AGAINST THE REAL FIRMWARE BEFORE TRUSTING ON HARDWARE !!
+# The layout below mirrors sim/init_ex.h, which is the simulator's stand-in and
+# was written from the field names n_ww_log_storage.c uses -- the magic and the
+# LOG type id in particular are placeholders. Correct these four constants and
+# everything downstream follows; nothing else encodes the layout.
+PT_MAGIC          = 0x50415254      # 'PART'
+PT_ENTRY_TYPE_LOG = 8
+PT_HDR_FMT        = '<IIIIHH'       # magic, version, product, ptableSize, pentryNum, rsv
+PT_ENTRY_FMT      = '<BBBBII'       # part_type, part_id, slot_id, rsv, offset, size
+PT_HDR_SIZE       = struct.calcsize(PT_HDR_FMT)      # 20
+PT_ENTRY_SIZE     = struct.calcsize(PT_ENTRY_FMT)    # 12
+PT_MAX_ENTRIES    = 16
+PT_SCAN_LIMIT     = 64 * 1024       # how far into a blob to look for the table
+
+
+def parse_partition_table(blob, off=None):
+    """Parse the partition table found in `blob` -> list of entry dicts.
+
+    With `off` omitted the magic is searched for, so a dump that starts at an
+    arbitrary offset (or a whole-chip image) still works. Returns [] when no
+    plausible table is present -- callers then fall back to explicit offsets.
+    """
+    if off is None:
+        off = blob.find(struct.pack('<I', PT_MAGIC), 0, PT_SCAN_LIMIT)
+        if off < 0:
+            return []
+    if off + PT_HDR_SIZE > len(blob):
+        return []
+
+    magic, _ver, _prod, _size, n, _rsv = struct.unpack_from(PT_HDR_FMT, blob, off)
+    if magic != PT_MAGIC or not (0 < n <= PT_MAX_ENTRIES):
+        return []
+
+    out = []
+    for i in range(n):
+        eoff = off + PT_HDR_SIZE + i * PT_ENTRY_SIZE
+        if eoff + PT_ENTRY_SIZE > len(blob):
+            break
+        ptype, pid, slot, _r, poff, psize = struct.unpack_from(PT_ENTRY_FMT, blob, eoff)
+        out.append({'type': ptype, 'id': pid, 'slot': slot,
+                    'offset': poff, 'size': psize})
+    return out
+
+
+def find_log_partition(blob, off=None):
+    """(offset, size) of the LOG partition from a partition table, or None."""
+    for e in parse_partition_table(blob, off):
+        if e['type'] == PT_ENTRY_TYPE_LOG and e['size'] > 0:
+            return e['offset'], e['size']
+    return None
+
+
+# ----------------------------------------------------------------------------
 # header decode + format substitution
 # ----------------------------------------------------------------------------
 
@@ -443,7 +504,23 @@ def parse_ext_partition(buf, off, notes):
 
 
 def parse_binary(data, notes):
-    """Auto-frame a binary dump by locating the first known container magic."""
+    """Auto-frame a binary dump by locating the first known container magic.
+
+    A whole-chip image is also handled: if it carries a partition table, the LOG
+    partition's real offset/size are taken from it (the same source the firmware
+    uses) and the search is confined to that window, instead of trusting a
+    hardcoded geometry that a repartition would silently invalidate.
+    """
+    part = find_log_partition(data)
+    if part is not None:
+        off, size = part
+        if off + 4 <= len(data):
+            notes.append("# partition table: LOG at 0x%X, %u bytes" % (off, size))
+            data = data[off:off + size]
+        else:
+            notes.append("# partition table names LOG at 0x%X, past the end of "
+                         "this dump (%u bytes) -> ignoring it" % (off, len(data)))
+
     iw = data.find(RAM_MAGIC_LE)
     ip = data.find(PART_MAGIC_LE)
     cands = [(i, k) for i, k in ((iw, 'ram'), (ip, 'flog')) if i != -1]

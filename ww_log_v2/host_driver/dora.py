@@ -1710,7 +1710,7 @@ class DORA:
         log = self.__board_log_get(v_map, v_boardId, v_mapDir)
         return log.f_decode_ram(v_addr, v_length, v_raw, v_output, v_hex)
 
-    def f_log_decode_flash(self, v_map, v_offset=0x0, v_length=4096,
+    def f_log_decode_flash(self, v_map, v_offset=None, v_length=None,
                            v_raw=False, v_output=None, v_hex=False, v_boardId=0,
                            v_mapDir=None):
         '''
@@ -1720,8 +1720,8 @@ class DORA:
             v_map    - 必选   ww_log_map.json 路径(当前版本)
             v_mapDir - 可选   历史 map 归档目录(make map-archive 产出);
                               日志跨固件版本时, 每段用产生它的那份 map 解
-            v_offset - 可选   flash 内偏移, 默认 0x0
-            v_length - 可选   读取字节数, 默认 4096
+            v_offset - 可选   flash 内偏移, 不指定则从设备分区表读取
+            v_length - 可选   读取字节数, 不指定则用分区表里的 LOG 分区大小
             v_raw    - 可选   每行后附带原始帧
             v_output - 可选   保存到文件; 后缀决定内容:
                               .dump/.bin -> 原始 log 字节(不解析); .txt/.log/其它 -> 文本
@@ -1730,7 +1730,7 @@ class DORA:
         log = self.__board_log_get(v_map, v_boardId, v_mapDir)
         return log.f_decode_flash(v_offset, v_length, v_raw, v_output, v_hex)
 
-    def f_log_decode_eeprom(self, v_map, v_offset=0x0, v_length=21 * 1024,
+    def f_log_decode_eeprom(self, v_map, v_offset=None, v_length=None,
                             v_raw=False, v_output=None, v_hex=False,
                             v_boardId=0, v_devAddr=None, v_mapDir=None):
         '''
@@ -1739,8 +1739,8 @@ class DORA:
         参数
             v_map     - 必选   ww_log_map.json 路径(当前版本)
             v_mapDir  - 可选   历史 map 归档目录(make map-archive 产出)
-            v_offset  - 可选   eeprom 内偏移, 默认 0x0
-            v_length  - 可选   读取字节数, 默认 21KB
+            v_offset  - 可选   eeprom 内偏移, 不指定则从设备分区表读取
+            v_length  - 可选   读取字节数, 不指定则用分区表里的 LOG 分区大小
             v_raw     - 可选   每行后附带原始帧
             v_output  - 可选   保存到文件; 后缀决定内容同上
             v_hex     - 可选   只按 4 个 U32/行 打印原始 encode 字, 不 decode

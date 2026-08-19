@@ -10,8 +10,12 @@ channel, then decodes with ww_log_map.json.
 Sources (where the encoded logs physically live):
     ram      4KB power-loss-retained DLM "maintain" region ('WLOG' header),
              read by memory address over JTAG (default addr 0xA021BD00).
-    flash    4KB LOG partition in SPI NOR flash ('XLOG' append log).
-    eeprom   21KB LOG partition in I2C EEPROM   ('XLOG' append log).
+    flash    LOG partition in SPI NOR flash ('XLOG' append log).
+    eeprom   LOG partition in I2C EEPROM      ('XLOG' append log).
+
+For flash/eeprom the partition offset and size are read from the device's
+partition table -- the same source log_ext_mem_init() uses -- so a repartition
+or a resize needs no change here. --offset/--length override that.
 
 The decoder auto-scans the read blob for the WLOG/XLOG magic, so an approximate
 offset (or a whole-region read) still works. An unwritten region reads back all
@@ -41,9 +45,10 @@ RAM_LEN_DEFAULT    = '0x1000'       # 4KB
 FLASH_LEN_DEFAULT  = '0x1000'       # 4KB
 EEPROM_LEN_DEFAULT = '0x5400'       # 21KB
 
-# LOG partition base offsets on each external medium.
-FLASH_LOG_OFFSET   = '0x1F000'      # flash  LOG partition base
-EEPROM_LOG_OFFSET  = '0x1AA00'      # eeprom LOG partition base
+# Fallback LOG partition bases, used only when the partition table cannot be
+# read; normally the geometry comes from the table.
+FLASH_LOG_OFFSET   = '0x1F000'
+EEPROM_LOG_OFFSET  = '0x1AA00'
 
 
 def _bootstrap_dora_root():
@@ -103,8 +108,8 @@ def cmd_ram(args, dora):
 def cmd_flash(args, dora):
     dora.f_log_decode_flash(
         args.map,
-        v_offset=parse_int(args.offset),
-        v_length=parse_int(args.length),
+        v_offset=parse_int(args.offset) if args.offset else None,
+        v_length=parse_int(args.length) if args.length else None,
         v_raw=args.raw,
         v_output=_resolve_output(args),
         v_hex=args.hexdump,
@@ -115,8 +120,8 @@ def cmd_flash(args, dora):
 def cmd_eeprom(args, dora):
     dora.f_log_decode_eeprom(
         args.map,
-        v_offset=parse_int(args.offset),
-        v_length=parse_int(args.length),
+        v_offset=parse_int(args.offset) if args.offset else None,
+        v_length=parse_int(args.length) if args.length else None,
         v_raw=args.raw,
         v_output=_resolve_output(args),
         v_hex=args.hexdump,
@@ -130,6 +135,7 @@ def cmd_eeprom(args, dora):
 # ---------------------------------------------------------------------------
 
 def _add_common(p, default_len):
+    """default_len=None means "ask the device partition table"."""
     p.add_argument('--map', required=True,
                    help='Path to ww_log_map.json (the current build)')
     p.add_argument('--map-dir', default=None, metavar='DIR',
@@ -139,8 +145,9 @@ def _add_common(p, default_len):
                         'stretch is decoded with the map that produced it, and '
                         'anything decoded with a different map is marked')
     p.add_argument('--length', default=default_len,
-                   help='Bytes to read (default: %s = the whole LOG region)'
-                        % default_len)
+                   help='Bytes to read (default: %s)'
+                        % (default_len or 'the LOG partition size from the '
+                                          'partition table'))
     p.add_argument('--raw', action='store_true',
                    help='Append the raw frame after each decoded line')
     p.add_argument('--hex', dest='hexdump', action='store_true',
@@ -184,22 +191,24 @@ def build_parser():
     # --- flash ---
     p_flash = sub.add_parser('flash',
                              help='Decode the LOG partition from SPI NOR flash')
-    p_flash.add_argument('--offset', default=FLASH_LOG_OFFSET,
-                         help='Flash offset of the LOG partition (default: %s)'
-                              % FLASH_LOG_OFFSET)
-    _add_common(p_flash, FLASH_LEN_DEFAULT)
+    p_flash.add_argument('--offset', default=None,
+                         help='Flash offset of the LOG partition. Default: read '
+                              'it from the device partition table (what the '
+                              'firmware itself uses); pass this only to override')
+    _add_common(p_flash, None)
 
     # --- eeprom ---
     p_eeprom = sub.add_parser('eeprom',
                               help='Decode the LOG partition from I2C EEPROM')
-    p_eeprom.add_argument('--offset', default=EEPROM_LOG_OFFSET,
-                          help='EEPROM offset of the LOG partition (default: %s)'
-                               % EEPROM_LOG_OFFSET)
+    p_eeprom.add_argument('--offset', default=None,
+                          help='EEPROM offset of the LOG partition. Default: read '
+                               'it from the device partition table (what the '
+                               'firmware itself uses); pass this only to override')
     p_eeprom.add_argument('--dev-addr', type=parse_dev_addr, default=None,
                           metavar='HEX',
                           help='EEPROM I2C 7-bit address (0x50-0x57); '
                                'auto-scan if omitted')
-    _add_common(p_eeprom, EEPROM_LEN_DEFAULT)
+    _add_common(p_eeprom, None)
 
     return parser
 

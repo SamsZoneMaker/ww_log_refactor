@@ -24,7 +24,12 @@ extern "C"
 /* RAM buffer layout */
 #define LOG_RAM_HEADER_SIZE       sizeof(LOG_RAM_HEADER_T)  /* Header size in bytes */
 #define LOG_RAM_DATA_SIZE         (DLM_MAINTAIN_LOG_SIZE - LOG_RAM_HEADER_SIZE)
+/* Tuning knobs come from log_autoconf.h (generated from log_config.json), which
+ * is force-included ahead of this header; the values here are the fallback for a
+ * build that does not use the generator. */
+#ifndef LOG_RAM_FLUSH_THRESHOLD
 #define LOG_RAM_FLUSH_THRESHOLD   (480)   /* ~one ext block payload (512B slot) */
+#endif
 
 #define LOG_RAM_MAGIC             (0x574C4F47)
 
@@ -32,6 +37,11 @@ extern "C"
 #define LOG_FLAG_ERROR            (1 << 1)
 #define LOG_FLAG_FLUSH_NEEDED     (1 << 2)
 #define LOG_FLAG_CORRUPTED        (1 << 3)
+/* FREEZE policy only: the archive filled up and stopped accepting entries.
+ * Lives in the RAM header so it survives into a RAM dump -- otherwise "the
+ * archive stops part-way through" is indistinguishable from "the device went
+ * quiet", and the ext ctx that knows is RAM-resident and lost on a cold boot. */
+#define LOG_FLAG_EXT_FULL         (1 << 4)
 
 // support macro
 #define LOG_SET_FLAG(flag)        (g_ram_buffer.header->flags |= (flag))
@@ -76,7 +86,9 @@ extern "C"
 /* Per-flush staging buffer: bounds both the RAM bytes scanned per log_ram_flush()
  * call and the static append buffer. The flush task re-arms while data remains,
  * so a backlog drains over successive calls. Must exceed one max entry (64B). */
+#ifndef LOG_EXT_FLUSH_STAGE_SIZE
 #define LOG_EXT_FLUSH_STAGE_SIZE  (256)
+#endif
 
 /* Ext-full policy: FREEZE stops flushing (preserves the earliest logs); ERASE
  * wipes the partition and restarts (preserves the newest). log-structured has no
@@ -122,7 +134,9 @@ typedef struct
                                  * bit0: overflow_flag
                                  * bit1: error_flag
                                  * bit2: flush_needed
-                                 * bit3-15: reserved
+                                 * bit3: corrupted
+                                 * bit4: ext archive full (FREEZE)
+                                 * bit5-15: reserved
                                  */
     U32 log_count;         /*==< */
     U32 reserved1;         /*==< */
@@ -201,6 +215,9 @@ void log_ram_get_header_info(LOG_RAM_HEADER_T *info);
 U32  log_calc_checksum(const void *data, U32 len);
 WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count);
 void log_ram_mark_error(void);
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
+void log_ram_set_ext_full(void);   /* FREEZE: archive filled up */
+#endif
 WW_RTN log_ram_validate_data(void);
 void log_ram_dump_hex(void);
 void log_ram_index_reset(void);

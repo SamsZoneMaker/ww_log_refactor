@@ -38,6 +38,8 @@
 static U8  g_sim_ext[SIM_EXT_TOTAL_SIZE];
 static int g_sim_ext_ready = 0;
 
+static void sim_pt_write_once(void);
+
 static void sim_ext_lazy_init(void)
 {
     if (!g_sim_ext_ready)
@@ -51,6 +53,7 @@ void sim_ext_reset(void)
 {
     memset(g_sim_ext, 0xFF, sizeof(g_sim_ext));
     g_sim_ext_ready = 1;
+    sim_pt_write_once();          /* a blank chip still ships with a table */
 }
 
 int sim_ext_dump_partition(const char *path)
@@ -67,6 +70,19 @@ int sim_ext_dump_partition(const char *path)
         return -1;
     }
     fwrite(&g_sim_ext[SIM_EXT_LOG_OFFSET], 1, SIM_EXT_LOG_SIZE, fp);
+    fclose(fp);
+    return 0;
+}
+
+int sim_ext_dump_chip(const char *path)
+{
+    FILE *fp;
+    sim_ext_lazy_init();
+    sim_pt_write_once();
+    if (path == NULL) { return -1; }
+    fp = fopen(path, "wb");
+    if (fp == NULL) { return -1; }
+    fwrite(g_sim_ext, 1, sizeof(g_sim_ext), fp);
     fclose(fp);
     return 0;
 }
@@ -108,10 +124,22 @@ REG_WW_STUS_SYS_INFO_U *reg_ww_stus_acc_sys_info_get(void)
     return &info;
 }
 
-/* ---- partition table ----------------------------------------------------- */
-PART_TABLE_T *pt_info_read(void)
+/* ---- partition table -----------------------------------------------------
+ * Laid down at offset 0 of the simulated device and read back from there,
+ * rather than synthesised in RAM. It matters that it lives in the image: the
+ * host tools locate the LOG partition by parsing this same table out of a chip
+ * dump (or a JTAG read), so keeping it device-resident is what makes that path
+ * exercisable in the sim instead of only on hardware.                       */
+static void sim_pt_write_once(void)
 {
-    static PART_TABLE_T pt;
+    PART_TABLE_T pt;
+
+    sim_ext_lazy_init();
+    if (*(U32 *)&g_sim_ext[0] == SIM_PART_MAGIC)
+    {
+        return;                                   /* already provisioned */
+    }
+
     memset(&pt, 0, sizeof(pt));
     pt.magic      = SIM_PART_MAGIC;
     pt.version    = 1;
@@ -123,6 +151,16 @@ PART_TABLE_T *pt_info_read(void)
     pt.pentry[0].slot_id     = 0;
     pt.pentry[0].part_offset = SIM_EXT_LOG_OFFSET;
     pt.pentry[0].part_size   = SIM_EXT_LOG_SIZE;
+
+    memcpy(&g_sim_ext[0], &pt, sizeof(pt));
+}
+
+PART_TABLE_T *pt_info_read(void)
+{
+    static PART_TABLE_T pt;
+
+    sim_pt_write_once();
+    memcpy(&pt, &g_sim_ext[0], sizeof(pt));
     return &pt;
 }
 

@@ -28,6 +28,10 @@ void sim_ext_reset(void);
  * file, the way the host would pull them over JTAG, so log_decoder.py can run. */
 int sim_ext_dump_partition(const char *path);
 
+/* Write the WHOLE simulated device (partition table included) to a file, the
+ * way a chip read-back looks to the host tools. */
+int sim_ext_dump_chip(const char *path);
+
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 
 #endif /* __SIM_EXT_STORAGE_H__ */

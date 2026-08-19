@@ -8,16 +8,19 @@ ONE map file, ww_log_map.json, that drives both the build and the decoder.
 
   file_id = module_id*128 + offset      (module_id 0-31, offset 0-127)
 
-file_id LOCKING (CLAUDE.md §2): on regeneration the previous ww_log_map.json
-is read first; files already assigned keep their offset, new files take the
-lowest free offset, and offsets of deleted files are reserved (never recycled)
-so historical logs from old firmware still decode correctly.
+file_id assignment: on regeneration the previous ww_log_map.json is read first,
+so a file that still exists keeps its offset; new files take the lowest free
+offset, and a DELETED file's offset is recycled. Cross-version decoding is the
+boot record's job (map_id, see n_ww_log_def.h), not this file's -- reserving
+offsets forever only ever froze file_id while line numbers drifted freely, which
+is the half that actually breaks.
 
 Modes:
   gen_log_map.py <config> [--out ww_log_map.json]   scan + (re)write the map
   gen_log_map.py <config> --makefile                derive build/file_ids.mk  (stdout)
   gen_log_map.py <config> --header                  derive auto_file_ids.h    (stdout)
   gen_log_map.py <config> --mapid                   derive log_map_id.h       (stdout)
+  gen_log_map.py <config> --autoconf                derive log_autoconf.h     (stdout)
   gen_log_map.py <config> --archive <dir>           archive the map as <dir>/ww_log_map_<id>.json
 
 Options:
@@ -422,17 +425,26 @@ def generate(config, old_map, root='.'):
     root = os.path.abspath(root)
     scanned = scan_c_files(modules, root)        # path -> module name (relative to root)
 
-    # --- recover previous assignments (path -> offset) and reserved offsets ---
+    # --- recover previous assignments (path -> offset) ---
     prev = {}                                    # path -> (module, offset)
     reserved = {}                                # module name -> set(offset)
     for name in modules:
         reserved[name] = set()
     if old_map:
         for fid_str, info in old_map.get('files', {}).items():
-            fid = int(fid_str)
-            offset = fid & 0x7F
-            mod = info.get('module')
-            prev[info['path']] = (mod, offset)
+            prev[info['path']] = (info.get('module'), int(fid_str) & 0x7F)
+
+    # Only offsets of files that STILL EXIST are held; a deleted file's slot is
+    # recycled. Reserving them forever used to be the defence against decoding
+    # old firmware's logs with a new map, but it was never more than half a
+    # defence: it froze file_id while leaving LINE free to drift, and line drift
+    # is what happens on nearly every edit. A stale entry would therefore keep
+    # the right file name and pick up a different statement's format string --
+    # the plausible-but-wrong case. The boot record (see n_ww_log_def.h) closes
+    # both holes properly, so the reservation now only costs slots.
+    scanned_set = set(scanned)
+    for path, (mod, offset) in prev.items():
+        if path in scanned_set and mod in modules:
             reserved.setdefault(mod, set()).add(offset)
 
     def next_offset(mod):
@@ -447,14 +459,6 @@ def generate(config, old_map, root='.'):
 
     files = {}        # file_id(int) -> {path, module, present}
     unregistered = []
-
-    # keep deleted files as reserved placeholders (offset not recycled)
-    scanned_set = set(scanned)
-    for path, (mod, offset) in prev.items():
-        if path not in scanned_set and mod in modules:
-            mid = modules[mod]['id']
-            files[mid * 128 + offset] = {"path": path, "module": mod,
-                                         "present": False}
 
     # assign present files (lock existing, append new in lowest free slot)
     for path in sorted(scanned):
@@ -588,6 +592,106 @@ def emit_header(config, the_map):
     return '\n'.join(lines)
 
 
+MODES = {'encode': 'CONFIG_N_LOG_MODE_ENCODE',
+         'string': 'CONFIG_N_LOG_MODE_STRING',
+         'disabled': 'CONFIG_N_LOG_MODE_DISABLED'}
+EXT_FULL_POLICIES = {'freeze': 'CONFIG_N_LOG_EXT_FULL_FREEZE',
+                     'erase': 'CONFIG_N_LOG_EXT_FULL_ERASE'}
+
+
+def emit_autoconf(config):
+    """Turn the config's `build` block into the CONFIG_* / tuning defines.
+
+    This exists so the knobs live in ONE place that is data rather than C. The
+    mode in particular used to be three mutually exclusive #defines that a human
+    commented in and out; forgetting to comment one back in did not fail the
+    build, it silently fell through to DISABLED and the firmware shipped mute.
+    Here the mode is a string, the three are generated from it, and an
+    unrecognised value is an error.
+    """
+    b = config.get('build', {})
+
+    def level(key, default):
+        name = str(b.get(key, default)).upper()
+        if name not in LEVELS:
+            sys.exit("Error: build.%s must be one of %s, got %r"
+                     % (key, '/'.join(LEVELS), b.get(key)))
+        return 'N_WW_LOG_LEVEL_' + name
+
+    def num(key, default):
+        try:
+            return int(b.get(key, default))
+        except (TypeError, ValueError):
+            sys.exit("Error: build.%s must be an integer, got %r"
+                     % (key, b.get(key)))
+
+    mode = str(b.get('mode', 'encode')).lower()
+    if mode not in MODES:
+        sys.exit("Error: build.mode must be one of %s, got %r"
+                 % ('/'.join(sorted(MODES)), b.get('mode')))
+    policy = str(b.get('ext_full_policy', 'freeze')).lower()
+    if policy not in EXT_FULL_POLICIES:
+        sys.exit("Error: build.ext_full_policy must be one of %s, got %r"
+                 % ('/'.join(sorted(EXT_FULL_POLICIES)), b.get('ext_full_policy')))
+
+    backends = b.get('backends', {})
+    lines = [
+        "/**",
+        " * @file log_autoconf.h",
+        " * @brief Auto-generated log configuration. DO NOT EDIT.",
+        " *",
+        " * Generated from the `build` block of scripts/log/log_config.json by",
+        " * scripts/log/gen_log_map.py. Edit the JSON, not this file.",
+        " */",
+        "",
+        "#ifndef LOG_AUTOCONF_H",
+        "#define LOG_AUTOCONF_H",
+        "",
+        "/* ===== Mode (exactly one, from build.mode = %r) ===== */" % mode,
+        "#define %s" % MODES[mode],
+        "",
+        "/* ===== Backends ===== */",
+        "#define CONFIG_N_LOG_BACKEND_UART     %d" % (1 if backends.get('uart', True) else 0),
+        "#define CONFIG_N_LOG_BACKEND_RAM      %d" % (1 if backends.get('ram', True) else 0),
+    ]
+    if backends.get('ext_mem', True):
+        lines.append("#define CONFIG_N_LOG_BACKEND_EXT_MEM  1")
+    else:
+        # EXT_MEM is tested with #ifdef, not its value, so it must be ABSENT
+        # rather than 0 when disabled.
+        lines.append("/* CONFIG_N_LOG_BACKEND_EXT_MEM is not set */")
+
+    lines += [
+        "",
+        "/* ===== Level thresholds ===== */",
+        "/* Compiled out entirely above this level (zero code size). */",
+        "#define N_WW_LOG_COMPILE_THRESHOLD    %s" % level('compile_threshold', 'DBG'),
+        "/* RAM keeps every level; only these reach external storage. */",
+        "#define N_WW_LOG_EXT_LEVEL_THRESHOLD  %s" % level('ext_level_threshold', 'WRN'),
+        "",
+        "/* ===== External storage ===== */",
+        "#define %s" % EXT_FULL_POLICIES[policy],
+    ]
+    if b.get('ext_flush_marker', True):
+        lines.append("#define CONFIG_N_LOG_EXT_FLUSH_MARKER")
+    else:
+        lines.append("/* CONFIG_N_LOG_EXT_FLUSH_MARKER is not set */")
+
+    lines += [
+        "#define LOG_EXT_FLUSH_STAGE_SIZE      (%d)" % num('ext_flush_stage_size', 256),
+        "",
+        "/* ===== RAM ring / flush task ===== */",
+        "#define LOG_RAM_FLUSH_THRESHOLD       (%d)" % num('ram_flush_threshold', 480),
+        "#define LOG_WRITE_TIMEOUT_MS          (%d)" % num('write_timeout_ms', 6),
+        "#define LOG_FLUSH_TIMEOUT_MS          (%d)" % num('flush_timeout_ms', 10000),
+        "#define LOG_FLUSH_TASK_STACK_SIZE     (%d)" % num('flush_task_stack', 256),
+        "#define LOG_FLUSH_TASK_PRIORITY       (%d)" % num('flush_task_priority', 1),
+        "",
+        "#endif /* LOG_AUTOCONF_H */",
+    ]
+    return '\n'.join(lines)
+
+
 def emit_map_id(the_map):
     """The one generated header carrying the map identity into the firmware.
 
@@ -688,6 +792,10 @@ def main():
         vh = (flags[flags.index("--version-header") + 1]
               if "--version-header" in flags else None)
         archive_map(the_map, flags[flags.index("--archive") + 1], vh)
+        return
+
+    if "--autoconf" in flags:          # derives from the config alone, no map
+        emit(emit_autoconf(config))
         return
 
     if "--makefile" in flags or "--header" in flags or "--mapid" in flags:

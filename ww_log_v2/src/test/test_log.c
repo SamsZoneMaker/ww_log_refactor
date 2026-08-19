@@ -61,6 +61,15 @@ static void t_write(U8 pcnt)
     t_write_lvl(N_WW_LOG_LEVEL_ERR, pcnt);
 }
 
+/* Bytes the flush path prepends to the FIRST batch a freshly cleared archive
+ * receives: one boot record, so the archive can always name the map that
+ * decodes it (n_ww_log_storage.c). Zero when there is no encode stream. */
+#if defined(CONFIG_N_LOG_MODE_ENCODE) && defined(CONFIG_N_LOG_BACKEND_EXT_MEM)
+#define EXT_FIRST_BATCH_LEAD    N_WW_LOG_BOOT_RECORD_SIZE
+#else
+#define EXT_FIRST_BATCH_LEAD    0
+#endif
+
 /* ====================================================================== */
 /* RAM ring tests (mode independent; need the RAM backend)                 */
 /* ====================================================================== */
@@ -227,15 +236,15 @@ static void test_ext_flush(void)
     {
         if (log_ram_flush() != LOG_EXT_OK) { break; }
     }
-    CHECK(log_ext_get_write_offset() == base_off + 20 * 8,
-          "write_off advanced by 20 entries * 8B");
+    CHECK(log_ext_get_write_offset() == base_off + EXT_FIRST_BATCH_LEAD + 20 * 8,
+          "write_off advanced by boot record + 20 entries * 8B");
 
     /* Partition header 'XLOG' present at the base, first entry right after it. */
     static U8 buf[64];
     log_ext_mem_read(buf, sizeof(buf));
     LOG_EXT_PART_HDR_T *ph = (LOG_EXT_PART_HDR_T *)buf;
     CHECK(ph->magic == LOG_EXTMEM_MAGIC, "partition header has 'XLOG' magic");
-    U32 e0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE);
+    U32 e0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE + EXT_FIRST_BATCH_LEAD);
     CHECK(N_WW_LOG_PCNT_OF(e0) == 1,             "first appended entry has pcnt=1");
     CHECK(N_WW_LOG_LEVEL_OF(e0) == N_WW_LOG_LEVEL_ERR, "first entry keeps ERR level");
 }
@@ -262,7 +271,7 @@ static void test_ext_level_filter(void)
     {
         if (log_ram_flush() != LOG_EXT_OK) { break; }
     }
-    CHECK(log_ext_get_write_offset() == base_off + 2 * 8,
+    CHECK(log_ext_get_write_offset() == base_off + EXT_FIRST_BATCH_LEAD + 2 * 8,
           "only the 2 ERR/WRN entries were appended to ext");
     CHECK(log_ram_get_pending_len() == 0,
           "all 4 entries consumed from RAM (INF/DBG dropped, not stuck)");
@@ -312,6 +321,7 @@ static void test_ext_resume(void)
     log_ext_mem_clear();
 }
 
+#if defined(CONFIG_N_LOG_MODE_ENCODE)
 /**
  * The boot record is what lets a host decode an archive that spans firmware
  * updates: n_ww_log_init() stamps one into the stream, naming the map that can
@@ -353,7 +363,8 @@ static void test_boot_record(void)
     }
 
     /* No flush marker is armed here, so the record sits right after the
-     * partition header. */
+     * partition header (the flush path stamps one for a fresh archive whether or
+     * not init already put one in the ring). */
     static U8 buf[64];
     log_ext_mem_read(buf, sizeof(buf));
     U32 *w = (U32 *)(buf + LOG_EXT_PART_HDR_SIZE);
@@ -365,6 +376,57 @@ static void test_boot_record(void)
 
     log_ext_mem_clear();
 }
+#endif /* CONFIG_N_LOG_MODE_ENCODE */
+
+#if defined(CONFIG_N_LOG_EXT_FULL_FREEZE)
+/**
+ * When the archive fills, the last batch must still top up the tail with as
+ * many WHOLE entries as fit rather than being discarded outright (which used to
+ * strand up to one staging buffer of partition), and the condition has to be
+ * visible afterwards -- hence LOG_FLAG_EXT_FULL in the RAM header, which
+ * outlives the RAM-resident ext ctx.
+ */
+static void test_ext_full_freeze(void)
+{
+    section("External storage: FREEZE tops up the tail, then flags full");
+    if (log_ext_mem_available() != WW_TRUE)
+    {
+        CHECK(0, "external storage available");
+        return;
+    }
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+
+    U32 end = log_ext_get_log_offset() + log_ext_get_log_size();
+    int guard = 0;
+
+    /* Keep writing 8B entries and draining until the archive freezes. */
+    while (log_ext_mem_is_full() != WW_TRUE && guard++ < 20000)
+    {
+        t_write(1);
+        if (log_ram_get_pending_len() >= LOG_EXT_FLUSH_STAGE_SIZE)
+        {
+            (void)log_ram_flush();
+        }
+    }
+    while (log_ram_get_pending_len() > 0 && guard++ < 20000)
+    {
+        if (log_ram_flush() == LOG_EXT_ERR_WRITE_FAIL) { break; }
+    }
+
+    CHECK(log_ext_mem_is_full() == WW_TRUE, "archive reports full");
+    CHECK((log_ram_get_flags() & LOG_FLAG_EXT_FULL) != 0,
+          "LOG_FLAG_EXT_FULL recorded in the RAM header");
+    /* Tail topped up: less than one whole entry of room may remain, not a whole
+     * discarded batch. */
+    CHECK(end - log_ext_get_write_offset() < 8,
+          "partition tail filled to within one entry");
+    CHECK(log_ext_get_write_offset() <= end, "write_off never runs past the end");
+
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+}
+#endif /* CONFIG_N_LOG_EXT_FULL_FREEZE */
 
 #if defined(CONFIG_N_LOG_EXT_FLUSH_MARKER)
 static void test_ext_flush_marker(void)
@@ -388,14 +450,15 @@ static void test_ext_flush_marker(void)
         if (log_ram_flush() != LOG_EXT_OK) { break; }
     }
     CHECK(log_ext_get_write_offset()
-              == base_off + LOG_EXT_FLUSH_MARKER_SIZE + 2 * 8,
-          "write_off = marker(8B) + 2 entries(16B)");
+              == base_off + EXT_FIRST_BATCH_LEAD + LOG_EXT_FLUSH_MARKER_SIZE + 2 * 8,
+          "write_off = boot record + marker(8B) + 2 entries(16B)");
 
     static U8 buf[64];
     log_ext_mem_read(buf, sizeof(buf));
-    U32 m0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE);
-    CHECK(m0 == LOG_EXT_FLUSH_MARKER_HDR, "first appended word is the flush marker");
-    U32 e0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE + LOG_EXT_FLUSH_MARKER_SIZE);
+    U32 m0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE + EXT_FIRST_BATCH_LEAD);
+    CHECK(m0 == LOG_EXT_FLUSH_MARKER_HDR, "flush marker follows the boot record");
+    U32 e0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE + EXT_FIRST_BATCH_LEAD
+                          + LOG_EXT_FLUSH_MARKER_SIZE);
     CHECK(N_WW_LOG_PCNT_OF(e0) == 1, "a real entry follows right after marker+tick");
 
     /* A second drain that was NOT re-armed must not add another marker. */
@@ -445,6 +508,9 @@ int test_log_run_all(void)
     test_ext_resume();
 #if defined(CONFIG_N_LOG_MODE_ENCODE)
     test_boot_record();
+#endif
+#if defined(CONFIG_N_LOG_EXT_FULL_FREEZE)
+    test_ext_full_freeze();
 #endif
 #if defined(CONFIG_N_LOG_EXT_FLUSH_MARKER)
     test_ext_flush_marker();

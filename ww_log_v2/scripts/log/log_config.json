@@ -1,4 +1,24 @@
 {
+  "build": {
+    "mode": "encode",
+
+    "backends": { "uart": true, "ram": true, "ext_mem": true },
+
+    "compile_threshold": "DBG",
+    "ext_level_threshold": "WRN",
+
+    "ext_full_policy": "freeze",
+    "ext_flush_marker": true,
+
+    "ram_flush_threshold": 480,
+    "ext_flush_stage_size": 256,
+
+    "write_timeout_ms": 6,
+    "flush_timeout_ms": 10000,
+    "flush_task_stack": 256,
+    "flush_task_priority": 1
+  },
+
   "modules": {
     "DEMO":    { "id": 1, "dirs": ["src/demo"],               "enable": true },
     "TEST":    { "id": 2, "dirs": ["src/test"],               "enable": true },

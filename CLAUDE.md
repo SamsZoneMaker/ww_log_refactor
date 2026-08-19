@@ -1,268 +1,398 @@
-# CLAUDE.md — ww_log v1 实现规格书
+# CLAUDE.md — ww_log v2 实现规格书
 
-> 本文件是 **ww_log_v1** 的实现规格。`/clear` 之后的 Claude 直接照此编写代码。
-> v0（旧实现）已整体移入 `ww_log_v0/`，**只读参考，不要修改**。
-> 新代码全部写在 `ww_log_v1/`。
-
----
-
-## 0. 项目背景（一句话）
-
-嵌入式日志系统重构。痛点：原 string 模式在固件体积受限时太占空间。需要一个 **encode 模式**（把每条 log 压成定长二进制）大幅省 ROM/RAM，同时保留 string 模式（调试用）和全关模式。encode 出的数据可存进 RAM（4KB，掉电不丢的维护区）并 flush 到外存，PC 端用映射文件 decode 回可读日志。
+> 本文件是 **ww_log_v2** 的实现规格与设计记录，`/clear` 之后照此继续。
+> `ww_log_v0/`、`ww_log_v1/` 是历史实现，**只读参考，不要修改**。
+> 新代码全部写在 `ww_log_v2/`。
 
 ---
 
-## 1. 三种模式（编译期切换）
+## 0. 项目背景
 
-在 `ww_log.h` 里三选一（沿用 v0 风格）：
+嵌入式日志系统重构。痛点：string 模式在固件体积受限时太占空间。**encode 模式**把每条 log 压成定长二进制，大幅省 ROM/RAM；同时保留 string 模式（调试用）和全关模式。encode 数据写进掉电保持 RAM（4KB DLM 维护区），按需搬到外存 LOG 分区，PC 端用映射文件 decode 回可读日志。
 
-```c
-// #define WW_LOG_MODE_STR        // string 模式：printf 风格，直观，体积大（调试用）
-// #define WW_LOG_MODE_ENCODE     // encode 模式：定长二进制，省体积（生产用）
-#define WW_LOG_MODE_DISABLED      // 全关：所有 LOG 宏展开为空
-```
-
-统一 API，三种模式调用点写法完全一致：
-
-```c
-LOG_ERR("msg");                 LOG_WRN("x=%d", a);
-LOG_INF("x=%d y=%d", a, b);     LOG_DBG("...");
-```
-
-- `WW_LOG_MODE_DISABLED`：四个宏 `do{}while(0)`。
-- 三种模式都必须支持 **level 开关** 和 **模块开关**（见 §4）。
+平台：RISC-V（Andes N25），FreeRTOS，无动态内存，RAM 紧张，UART/JTAG 为主调试口。
 
 ---
 
-## 2. encode 编码格式（核心，已锁定）
+## 1. 配置：唯一来源是 `scripts/log/log_config.json`
 
-每条 log 头部是一个 **U32**：
-
-```
- 31                20 19              6 5         0
-┌────────────────────┬──────────────────┬───────────┐
-│   file_id (12)     │    line (14)     │ param_cnt │
-│                    │                  │   (6)     │
-└────────────────────┴──────────────────┴───────────┘
-        │
-        └ file_id = [ module_id : 5 ][ offset : 7 ]
-```
-
-| 字段 | 位宽 | 范围 | 含义 |
-|------|------|------|------|
-| file_id | 12 | 0–4095 | 高 5 位 = module_id(0–31)，低 7 位 = 模块内 offset(0–127) |
-| line | 14 | 0–16383 | `__LINE__` |
-| param_count | 6 | 0–63 | 后跟的 U32 参数个数（**让缓冲区自描述**） |
-
-**level 不进编码。** 它在编码前就用于过滤（运行期 `level > threshold` 直接 return），decode 时再由 map 按 `(file_id, line)` 还原。
-
-U32 头之后紧跟 `param_count` 个 U32 参数。一条完整 entry = `4 + param_count*4` 字节。
-
-```c
-#define WW_LOG_ENCODE(file_id, line, pcnt) \
-    ( (((U32)(file_id) & 0xFFF) << 20) | \
-      (((U32)(line)    & 0x3FFF) << 6) | \
-      ( (U32)(pcnt)    & 0x3F) )
-
-#define WW_LOG_MODULE_OF(file_id)  (((file_id) >> 7) & 0x1F)
-#define WW_LOG_OFFSET_OF(file_id)  ((file_id) & 0x7F)
-```
-
-> 与 v0 的差异：v0 是 `[file_id12][line12][datalen6][level2]`，line 只到 4095 且含 level。v1 去掉 level、line 扩到 16383、file_id 内部改为 5+7 划分。
-
-### `%s` 处理（不禁止）
-
-当前代码里 `%s` 主要用于打印 `__FILE__/__LINE__`，而 file/line 已在 U32 头里冗余存在。策略：
-- 运行期：encode 模式照常把 `%s` 对应的指针当 U32 存入缓冲（浪费 4 字节，但无害）。
-- decode 期：map 里的 fmt 含 `%s`，decoder 对该参数显示占位 `<%s@0xXXXXXXXX>`（内容不可还原）。
-- 构建期扫描器遇到 `%s` **只告警不报错**。
-
----
-
-## 3. 无感的 ID 管理 + 统一 JSON
-
-### 输入：`log_config.json`（人工维护，只登记 模块→目录）
+模式、后端、所有阈值都在这里，**不再散落在头文件里**：
 
 ```json
 {
+  "build": {
+    "mode": "encode",                    // encode | string | disabled
+    "backends": { "uart": true, "ram": true, "ext_mem": true },
+    "compile_threshold": "DBG",          // 高于此级别的日志编译期消失
+    "ext_level_threshold": "WRN",        // RAM 存全部，只有这些进外存
+    "ext_full_policy": "freeze",         // freeze | erase
+    "ext_flush_marker": true,
+    "ram_flush_threshold": 480,
+    "ext_flush_stage_size": 256,
+    "write_timeout_ms": 6,
+    "flush_timeout_ms": 10000,
+    "flush_task_stack": 256,
+    "flush_task_priority": 1
+  },
   "modules": {
-    "DEMO":    { "id": 1, "dirs": ["src/demo"],                 "enable": true },
-    "DRIVERS": { "id": 4, "dirs": ["src/drivers", "src/hal"],   "enable": true },
-    "TEST":    { "id": 2, "dirs": ["src/test"],                 "enable": false }
+    "DEMO":    { "id": 1, "dirs": ["src/demo"],               "enable": true },
+    "TEST":    { "id": 2, "dirs": ["src/test"],               "enable": true },
+    "DRIVERS": { "id": 4, "dirs": ["src/drivers", "src/hal"], "enable": true }
   },
   "unregistered": "warn"
 }
 ```
 
-- module 由 **路径前缀匹配** 判定，**最长前缀优先**。
-- 一个模块可含多个目录、任意多文件。
-- 不在任何 `dirs` 下的 .c → 告警 + 该文件 log 关闭（不阻断编译）。
-- module_id 由人工在此分配，**稳定**（开关 key 在它上面）。范围 0–31。
+`gen_log_map.py --autoconf` 把 `build` 块渲染成 `output/log_autoconf.h`（`CONFIG_N_LOG_*` 等宏），`sim/autoconf.h` 只是 include 它的薄壳。
 
-### 生成：`tools/gen_log_map.py` 扫描 → `ww_log_map.json`（生成且提交）
+**mode 用字符串而不是三个互斥 `#define`**：旧写法靠人工注释/反注释，漏掉一个不会报错，会**静默降级成 DISABLED**（`n_ww_log_macro.h` 的 else 分支）。现在拼错会直接 `Error: build.mode must be one of ...`。
 
-脚本扫 `dirs` 下所有 `.c`，提取每个 `LOG_xxx(...)` 调用的 **行号 + level + fmt**，产出统一映射文件：
+头文件里的同名宏都加了 `#ifndef` 兜底，不走生成器的构建仍可编译。
 
-```json
+模块由**路径前缀匹配**判定，最长前缀优先；不在任何 `dirs` 下的 `.c` → 告警 + 该文件日志关闭（不阻断编译）。module_id 人工分配、**稳定**（动态开关的 key 在它上面），范围 0–31。
+
+调用点写法三种模式完全一致：
+```c
+N_LOG_ERR("msg");            N_LOG_WRN("x=%d", a);
+N_LOG_INF("x=%d y=%d", a,b); N_LOG_DBG("...");
+```
+
+---
+
+## 2. encode 编码格式（已锁定）
+
+每条 entry = 4 字节头 + `pcnt` 个 U32 参数。
+
+```
+ 31              20 19            6 5   4 3      0
+┌──────────────────┬────────────────┬─────┬───────┐
+│  file_id (12)    │   line (14)    │lv(2)│pcnt(4)│
+└──────────────────┴────────────────┴─────┴───────┘
+        └ file_id = [ module_id : 5 ][ offset : 7 ]
+```
+
+| 字段 | 位宽 | 说明 |
+|---|---|---|
+| file_id | 12 | 高 5 位 module_id(0–31)，低 7 位模块内 offset(0–127) |
+| line | 14 | `__LINE__`，0–16383 |
+| level | 2 | ERR/WRN/INF/DBG |
+| pcnt | 4 | 后跟的 U32 参数个数，0–15（让缓冲区自描述） |
+
+**level 进编码**（与 v1 规格不同）：flush 路径要能逐条判断该不该搬进外存，读头里的 level 即可，不需要旁表。代价是 pcnt 从 6 位缩到 4 位（最多 15 个参数）。
+
+宏见 `n_ww_log_def.h`：`N_WW_LOG_ENCODE / _FILEID_OF / _LINE_OF / _LEVEL_OF / _PCNT_OF / _MODULE_OF / _OFFSET_OF`。
+
+### 控制记录命名空间
+
+日志模块写进自己数据流的记录。**`file_id = 0xFFF` 被生成器永久保留**，永不分配给源文件，所以不会和真实调用点撞车；它们的 `pcnt` 是正常的，所有遍历器（冷启动扫描、flush 打包、host 解码）都当普通 entry 跳过，**无需任何特判**。
+
+| line | 记录 | 内容 | 大小 |
+|---|---|---|---|
+| `0x3FFF` | flush marker | `[hdr][tick]` | 8 B |
+| `0x3FFE` | boot record | `[hdr][map_id][BUILD_VERSION][BUILD_GIT_ID]` | 16 B |
+| `0x3FF0`–`0x3FFD` | 预留 | | |
+
+### `%s` 处理
+
+encode 模式照常把指针当 U32 存入（浪费 4 字节，无害）；decode 时显示 `<%s@0xXXXXXXXX>`；扫描器遇到 `%s` 只告警不报错。
+
+---
+
+## 3. ID 管理与 `ww_log_map.json`
+
+`gen_log_map.py` 扫描 `modules.dirs` 下所有 `.c`，产出统一映射文件，**同时驱动构建和解码**。
+
+### file_id 分配
+
+- `file_id = module_id * 128 + offset`
+- 重新生成时先读旧 map：**现存文件保持原 offset**（日常看裸 hex 时 id 稳定）
+- **删除的文件其 offset 会被回收**
+
+> 早期设计是「删除的 offset 永久占位」，用来让旧固件的日志能被新 map 解开。但它只冻结了 `file_id`，`line` 照样漂移 —— 而改任何一行代码都会让后面所有日志行号平移。结果是「文件名对、fmt 错」的**貌似合理但完全错误**的输出。跨版本解码改由 boot record + map_id 负责（§7），占位就只剩浪费槽位了。
+
+### 扫描覆盖
+
+除了字面 `N_LOG_xxx(`，还识别这些**展开成 `N_LOG_ERR` 的 helper 宏**（`n_ww_log_macro.h`）：
+
+```
+N_RETURN_CODE_IF_TRUE / N_RETURN_IF_TRUE  ->  "-- line:%d rc:0x%x\r\n", 2 参数
+N_BREAK_IF_TRUE / N_CONTINUE_IF_TRUE / N_PRINT_IF_TRUE  ->  "rc:0x%x\r\n", 1 参数
+```
+
+宏体里的 `__LINE__` 在**调用点**展开（GCC 对多行调用取起始行，与扫描器记录一致），所以它们发出的是归属正确的真实 entry；不进 map 的话每一条都解成 `<no map entry>`。`_WO_PRINT` 变体不发日志，故意不在表内。
+
+**头文件里打日志无解**：一行 `.h` 代码被 N 个 `.c` include 就产生 N 个不同 `file_id`，且行号可能和该 `.c` 自己的日志撞车，`(file_id, line)` 表达不了。扫描器只告警，不生成会解错的 entry。
+
+### 显示名消歧
+
+`target/a/main.c` 和 `target/b/main.c` 这类重名：ID 分配本来就按路径、没问题，问题在显示层。生成器算一份显示名存进 map 的 `short` 字段，**STR 模式（`__NOTDIR_FILE__`）和 decoder 共用**：basename 唯一就用 basename（输出不变），重名才带目录。
+
+### 构建期校验
+
+fmt 里非 `%%` 的占位符个数 vs 实际传参个数，不一致告警；同一行出现两处日志调用会告警（`(file_id, line)` 无法区分）。
+
+---
+
+## 4. 开关
+
+### 静态（编译期，零体积）
+Makefile 按文件注入 `CURRENT_FILE_ID` / `CURRENT_MODULE_ID` / `CURRENT_MODULE_STATIC_EN`（来自 `file_ids.mk`）。`STATIC_EN=0` 时宏展开为空，该文件日志零体积。另有编译期阈值 `N_WW_LOG_COMPILE_THRESHOLD`。
+
+**日志核心只认这三个注入宏**，换构建系统只需换注入方式，核心不动。
+
+### 动态（运行期）
+`g_ww_log_module_mask`（U32，一位一模块）+ `g_ww_log_level_threshold`：
+
+```c
+if ((g_ww_log_module_mask & (1U << module_id)) == 0) return;
+if (level > g_ww_log_level_threshold) return;
+```
+
+检查集中在输出函数内部以减小调用点体积。开关 key 在 **module_id** 上，不做文件粒度（避免依赖会变的 offset）。
+
+---
+
+## 5. 输出后端（可组合）
+
+`ww_log_backend_emit()` 把编码后的 entry 扇出给所有开启的后端：
+
+- **UART** — hex 帧 `0x%08X ...`（string 模式则是可读文本）
+- **RAM** — 4KB DLM 维护区环形缓冲，热重启保留
+- **EXT_MEM** — 外存 LOG 分区（依赖 RAM 后端）
+
+`ww_log_backend_emit()` **不做任何过滤**，是 boot record 这类必达记录的入口；带过滤的入口是 `n_ww_log_encode_output()`。调用 `N_LOG_*` 的代码对后端组合完全无感。
+
+---
+
+## 6. 外存归档（log-structured）
+
+LOG 分区是**追加流**，不是定长槽位环：
+
+```
+[log_offset .. +8)          8B 'XLOG' 分区头，首次初始化写一次，此后不再重写
+[log_offset+8 .. write_off) 背靠背的完整 entry（和 RAM 环里的线格式完全相同）
+[write_off .. 分区末)        0xFF 未写区
+```
+
+- 分区 offset/size **来自分区表**（`pt_entry_get_by_key(pt, PART_ENTRY_TYPE_LOG, ...)`），不写死
+- 每次 flush 把通过 `N_WW_LOG_EXT_LEVEL_THRESHOLD` 的完整 entry 追加到 `write_off`；无块头、无 CRC、无 footer —— 流自描述（pcnt 给出长度），首个 `0xFFFFFFFF` 即结尾
+- `write_off` 在 RAM 常驻 ctx（noinit）：热重启保留；**冷启动靠扫描重建**，从而跨重启保留历史归档
+- 为什么不用定长槽位：NOR 无法擦子扇区；且定时 flush 几个字节会浪费整个 512B 槽
+
+### 写满策略
+
+`freeze`（默认）停止追加、保留最早的日志；`erase` 擦掉重来、保留最新的。追加流没有逐槽滚动窗口，只能二选一。
+
+FREEZE 触发时：
+- **按 entry 边界把分区尾部填满**（不整批丢弃，否则最多浪费一个 staging buffer ≈255 B）；追加流绝不能停在半条 entry 上
+- 置 `LOG_FLAG_EXT_FULL`（RAM 头 bit4）—— ext ctx 冷启动会丢，而 RAM 头会进 dump，否则「归档中途停止」和「设备不再打日志」无法区分
+- 之后不再唤醒 flush task（醒来只会立刻退出）
+
+---
+
+## 7. 跨固件版本解码（核心机制）
+
+归档刻意跨重启和**固件升级**保留，所以一条流里会有多个不同 map 产生的 entry。用当前 map 解全部是最危险的情况：旧的 `(file_id, line)` 在新 map 里通常仍能命中**某一条** entry —— 只是那一行现在是另一条语句 —— 输出看着合理但是错的。
+
+### map_id
+
+对**影响解码结果**的东西取 sha256 前 4 字节：encode 格式标签 + 每个 `(file_id → path)` + 每个 `(file_id, line, level, fmt)`。
+
+刻意**不含**：`meta`（build_time、map_id 自身）、模块 enable 开关、JSON 排版、派生的 `short` —— 这些变了解码结果不变，纳入只会制造假告警。
+
+两个性质：
+1. **是 map 文件内容的纯函数** → 这个字段出现之前生成的老 map 也能重算出 id 并被正确索引；`meta.map_id` 只是交叉校验
+2. canonical 序列化格式**已冻结**，改了会给所有归档 map 重新贴标签
+
+落在 `0x00000000` / `0xFFFFFFFF` 时强制改成 `1`（这两个值在流里像"未初始化"和"已擦除"）。
+
+### boot record
+
+固件**不做任何版本比较**，只在流里盖戳。`n_ww_log_init()` 通过 `ww_log_backend_emit()`（不过滤）发一条 16B boot record，level 取 ERR 保证一定过外存阈值。它同时出现在 UART、RAM 环和外存。
+
+**不变量**：归档里只要有 entry，前面一定有 boot record。这由 **flush 路径**保证 —— 一个空归档收到第一批数据时自动补一条，而不是依赖 init 时序（"擦除归档 → 随后清空 RAM 环"会在盖的戳被 flush 之前就丢掉它）。
+
+顺序在两种启动下都对：冷启动时环已清空，boot record 是本次启动第一条；热重启时未 flush 完的残留 entry 排在它前面，flush 按最旧优先，所以那些残留仍归属**上一条** boot record。
+
+### 分区头一个字节都不动
+
+原本想把 map_id 塞进 `LOG_EXT_PART_HDR_T` 的 `reserved`，**放弃了**：`log_ext_mem_init()` 的续接检查是 `magic != ... || version != LOG_EXT_FORMAT_VERSION`，一旦改结构、版本号从 1 变 2，所有现场设备升到这版固件的瞬间归档会被**全擦** —— 正好是这个功能要防的事。保持格式版本 1，老归档原样保留，第一条 boot record 之前的 entry 由 decoder 明确标注为"map 未知"。
+
+### map 归档
+
+boot record 只写下一个 id，**那份 map 文件得有人存着**。开发期每改一行 map_id 就变，自动存会瞬间堆出几百个一次性文件，所以做成显式一步：
+
+```bash
+make map-archive     # -> maps/ww_log_map_<map_id>.json
+```
+
+发版/打 tag 时调用（建议挂进 CI）。归档时顺带从 `version.h` 读出 `BUILD_VERSION` / `BUILD_GIT_ID` / `BUILD_TIME` 写进 meta（用 `fw_` 前缀，避免和 map 自己的 `build_time` 撞名），这样每份归档 map 自带"我属于哪个固件版本"。`maps/` 进 git。
+
+### 解码
+
+```bash
+python3 log_decoder.py --map ww_log_map.json --map-dir maps/ dump.bin
+log_tool.py eeprom --map ww_log_map.json --map-dir maps/      # JTAG 侧同样支持
+```
+
+decoder 遇到 boot record 就切换当前 map：
+
+| 情况 | 行为 |
+|---|---|
+| id 命中 | 打印段头，正常解 |
+| id 未命中 | 段头带 WARNING，用默认 map 解但**每行前缀 `?`** |
+| 第一条 boot record 之前的 entry（老归档） | 同样 `?` |
+
+---
+
+## 8. 构建（增量编译是硬约束）
+
+改一个源文件只会移动**行号**（只有 decoder 关心，走 `ww_log_map.json`），不会改变 **file_id**（`-D` 注入，影响每个目标文件）。这两者**绝不能共用一个时间戳**，否则每次保存都要全量重编。
+
+| 生成物 | 时间戳策略 | 谁依赖它 |
+|---|---|---|
+| `ww_log_map.json` | 内容变才写 | 无（只给 decoder） |
+| `file_ids.mk` | **每次都 touch** | 无（只被 `-include`） |
+| `auto_file_ids.h` | 内容变才写 | 所有 `.o` |
+| `log_map_id.h` | 内容变才写 | 只有 control.c / test_log.c |
+| `log_autoconf.h` | 内容变才写 | 所有 TU（被强制 include） |
+
+> `file_ids.mk` 必须每次 touch：它被 `-include`，而一个目标如果保持比依赖更旧的 mtime，**GNU make 会无限重启**。所以让它照常 touch，把"内容没变就别动"的责任交给 `auto_file_ids.h`。
+
+实测（12 个目标文件）：
+
+| 操作 | 重编译数 |
+|---|---|
+| 改一个已登记 `.c`（map_id 不变） | 1 |
+| 改一个已登记 `.c`（行号平移，map_id 变） | 3 |
+| 新增 / 删除 `.c` | 全部（保守且正确） |
+| 空跑 | 0 |
+
+其它两点：
+- `$(LOG_SRCS)` 用递归 `find`，和生成器的 `os.walk` 一致 —— 非递归 wildcard 会给 `src/demo/sub/x.c` 发 file_id 却永远不编译它
+- 扫描目录本身也是依赖：**删除**源文件会让它从 `$(LOG_SRCS)` 里消失，就没有比 `file_ids.mk` 更新的东西了，map 会一直标它存在；目录 mtime 会在增删条目时变化，正好覆盖这种情况
+
+**`map_id` 绝不能用全局 `-D` 注入** —— make 只比对文件时间戳、不跟踪命令行，map 变了而源文件没变时它根本不重编，固件里会留一个过期的 map_id，而这个 id 的全部意义就是保证对得上。所以做成文件依赖：生成 `output/log_map_id.h`，只被需要它的 `.c` include。
+
+---
+
+## 9. host 工具
+
+`host_driver/` 是 dora 部署里的自包含副本（不依赖 `scripts/`）；`scripts/log/log_decoder.py` 是离线版。两边逻辑保持同步。
+
+**分区几何来自分区表**，不写死：`log_tool.py flash|eeprom` 默认从设备分区表读 LOG 分区的 offset/size（固件用的是同一张表），`--offset/--length` 仅作覆盖。离线 decoder 拿到整片镜像时同样先找分区表，把搜索范围限定到 LOG 分区。
+
+> ⚠️ `PT_MAGIC` / `PT_ENTRY_TYPE_LOG` / 结构体布局目前照抄 `sim/init_ex.h`，那是仿真用的**占位定义**（`PART_ENTRY_TYPE_LOG (8)` 上面就挂着 TODO）。**上硬件前必须和真实固件核对这四个常量**；改了它们下游全部自动跟上，布局没有编码在别处。
+
+sim 侧的分区表现在**写在模拟设备的 offset 0**（不是在 RAM 里现造），`sim_ext_dump_chip()` 能导出整片镜像，所以 host 的分区表解析路径在仿真里就能跑通。
+
+---
+
+## 10. panic 模式（TODO — 待固件集成，当前已删除）
+
+> panic 相关代码已从 v1/v2 删除。下一步研究固件向量中断时按此清单接回来，其中 **#1** 是最直接的挂载点。
+
+panic 不是主动调用的功能，而是挂在**系统异常入口**上：崩溃瞬间抢救崩溃前的日志（①绕过过滤 ②同步 flush RAM→外存 ③UART 切轮询 ④置 flag 后续直写）。
+
+### #1 主战场：RISC-V trap / 异常处理函数
+
+RISC-V 同步异常都跳到 `mtvec` 指向的 trap 入口，handler 读 `mcause` 判因。BSP/startup 里那个函数（常见名 `trap_handler` / `trap_entry` / `default_exception_handler`，在 `trap.c` 或 `startup_*.S`）就是挂载点。对**不可恢复异常**：
+
+```c
+void trap_handler(unsigned long mcause, unsigned long mepc)
 {
-  "meta": { "version": "<来自项目宏，先留空/注释>", "build_time": "...", "encoding": "file12_line14_pcnt6" },
-  "modules": { "1": {"name":"DEMO","enable":true}, "4": {"name":"DRIVERS","enable":true} },
-  "files":   { "64": {"path":"src/demo/demo_init.c","module":"DEMO"}, "65": {"path":"src/demo/demo_process.c","module":"DEMO"} },
-  "entries": [
-    {"file_id":64,"line":18,"level":"INF","fmt":"Demo module initializing..."},
-    {"file_id":64,"line":26,"level":"INF","fmt":"Hardware check passed, code=%d"}
-  ]
+    if ((mcause >> (__riscv_xlen - 1)) == 0) {        /* 最高位=0 → 异常 */
+        switch (mcause & 0xFF) {
+            case 1: case 2: case 5: case 7:           /* access / illegal fault */
+            case 0: case 4: case 6:                   /* misaligned */
+                N_LOG_ERR("FATAL trap mcause=%d mepc=%x", (int)mcause, (unsigned)mepc);
+                ww_log_panic();        /* N_LOG_ERR 必须在 panic 之前 */
+                ww_system_reset();
+                break;
+            default: break;
+        }
+    }
 }
 ```
 
-### file_id 锁定（关键，#2 决策）
+崩溃现场最该记 `mcause`/`mepc`（出错指令地址）和核心寄存器。
 
-- file_id = `module_id*128 + offset`（module_id 来自 config，offset 模块内分配）。
-- **重新生成时先读旧 `ww_log_map.json`**：已分配过的文件保持原 offset 不变，新文件只在空位追加。删除的文件其 offset **保留占位、不回收**。
-- 目的：旧固件的历史日志仍能被新 map 正确 decode（增删文件不让已存在 id 漂移）。
+### #2 看门狗
+有预超时 / window 中断才接得上；无预警硬复位时靠"日志平时就在掉电保持 RAM 区"，复位后 `n_ww_log_init()`（内部 `log_ram_init(force_clear=0)`）捞回来。
 
-### 一文件两用（#3 决策）
+### #3 软件致命路径
+`ASSERT()` 失败分支、栈溢出 / 内存分配失败 hook、任何 `while(1)` 死等前。
 
-`ww_log_map.json` 同时驱动构建和 decode：
-- `gen_log_map.py --makefile` → 派生 `build/file_ids.mk`（供 Makefile `-D` 注入）。
-- `gen_log_map.py --header` → 派生 `include/auto_file_ids.h`（模块/文件 ID 宏）。
-- `tools/log_decoder.py --map ww_log_map.json` → 直接读它做还原。
+### ⚠️ 三个坑
+1. panic 跑在异常上下文，中断可能是关的 → UART 输出必须**纯轮询**（busy-wait FIFO），不能依赖 TX 中断/DMA
+2. panic 里同步 flush 外存**只在驱动能在异常上下文同步跑时才安全**；要等中断/信号量会死锁 → 那就只保 RAM
+3. 掉电保持 RAM 区必须落在**不被启动代码清零的段**（noinit / `.no_init`），否则复位即丢
 
-### 构建期校验（#10）
-
-扫描时统计 fmt 里非 `%%` 的占位符个数，与该调用实际传参个数比对，不一致 **告警**。
-
----
-
-## 4. 开关设计（string / encode 都要）
-
-两层，互不依赖：
-
-### 静态开关（编译期，零代码）
-Makefile 按文件注入 `CURRENT_MODULE_STATIC_EN`（来自该文件所属模块的 `enable`）。为 0 时 LOG 宏展开为空，**该文件 log 零体积**。沿用 v0 的 `_WW_LOG_IF(cond)` 拼接技巧。
-
-另加编译期 level 阈值 `WW_LOG_COMPILE_THRESHOLD`：高于阈值的 `LOG_DBG/INF` 直接编译掉。
-
-### 动态开关（运行期）
-- `g_ww_log_module_mask`（U32，一位一个模块，0–31）→ `ww_log_set_module_mask / enable_module / disable_module`。
-- `g_ww_log_level_threshold` → `ww_log_set_level_threshold`。
-- 检查在输出函数内部完成（集中，减小调用点体积）：
-  ```c
-  if ((g_ww_log_module_mask & (1U << module_id)) == 0) return;
-  if (level > g_ww_log_level_threshold) return;
-  ```
-
-> 开关 key 在 **module_id**（config 分配，稳定），不在 offset 上。因此 file_id 锁定/漂移不影响开关。动态开关停在**模块**粒度，不做文件粒度（避免依赖会变的 offset）。
-
-### Makefile 注入（耦合点收敛）
-日志核心只认三个注入宏：`CURRENT_FILE_ID` / `CURRENT_MODULE_ID` / `CURRENT_MODULE_STATIC_EN`。沿用 v0 的 per-file 编译规则（`$(eval ...)` 从 `file_ids.mk` 查这三个值）。这样将来换构建系统只需换"注入这三个宏"的方式，核心不动。
+### 闭环
+业务运行 → trap 里 panic 保命 → 复位 → `n_ww_log_init()` 恢复 → decode 看现场。
 
 ---
 
-## 5. 输出后端（可组合，#6）
-
-`ww_log_config.h` 里三个独立开关，可叠加：
-
-```c
-#define WW_LOG_BACKEND_UART     1
-#define WW_LOG_BACKEND_RAM      1
-#define WW_LOG_BACKEND_STORAGE  0
-```
-
-- 输出函数编码出 U32 后，依次分发给所有开启的后端（轻量函数指针表或直接 `#if` 串联，不引入动态注册复杂度）。
-- **UART**：encode 模式输出 hex 帧（`0x%08X` 头 + 参数，沿用 v0 格式即可）；string 模式输出可读文本。
-- **RAM**：环形缓冲，沿用 v0 `ww_log_ram.*`（4KB = 64B header + 数据区，3KB flush 阈值，热重启恢复）。
-- **STORAGE**：flush 到外存，沿用 v0 `ww_log_storage.* / ww_log_header.* / ww_log_flush.*`。
-
-调用 `LOG_xxx()` 的代码对后端组合完全无感。
-
----
-
-## 6. panic 模式（#7，v0 没有）
-
-```c
-void ww_log_panic(void);
-```
-
-在 HardFault / watchdog 回调里调用，语义：
-1. 绕过所有模块/level 过滤；
-2. 立即同步 flush RAM → 外存（不等阈值）；
-3. UART 切轮询输出（不依赖中断）；
-4. 置 panic flag，后续 LOG 直接同步直写。
-
-目的：没有 UART 时，靠 RAM/外存保住崩溃前最后几条日志。
-
----
-
-## 7. 目录结构
+## 11. 目录结构
 
 ```
-ww_log/
-├── CLAUDE.md                  ← 本文件
-├── ww_log_v0/                 ← 旧实现，只读参考
-└── ww_log_v1/                 ← 在这里写新代码
-    ├── Makefile
-    ├── log_config.json        ← 人工：模块→目录
-    ├── ww_log_map.json        ← 生成（构建+decode 共用）
-    ├── include/
-    │   ├── type.h                  (从 v0 拷)
-    │   ├── ww_log.h                (模式分发 + 公共 API + level 宏)
-    │   ├── ww_log_config.h         (后端开关 / RAM 尺寸 / 阈值 / magic)
-    │   ├── ww_log_encode.h
-    │   ├── ww_log_str.h
-    │   ├── ww_log_modules.h        (动态 mask + level 阈值 API)
-    │   ├── ww_log_backend.h        (后端分发)
-    │   ├── ww_log_ram.h
-    │   ├── ww_log_storage.h
-    │   ├── ww_log_header.h
-    │   ├── ww_log_flush.h
-    │   ├── ww_log_panic.h
-    │   └── auto_file_ids.h         (生成)
-    ├── core/
-    │   ├── ww_log_common.c         (init / 全局变量定义)
-    │   ├── ww_log_encode.c
-    │   ├── ww_log_str.c
-    │   ├── ww_log_modules.c
-    │   ├── ww_log_backend.c
-    │   ├── ww_log_ram.c
-    │   ├── ww_log_storage.c
-    │   ├── ww_log_header.c
-    │   ├── ww_log_flush.c
-    │   └── ww_log_panic.c
-    ├── sim/                    ← PC 仿真外存（沿用 v0 sim_storage.*）
-    ├── tools/
-    │   ├── gen_log_map.py      (扫描 → ww_log_map.json / file_ids.mk / auto_file_ids.h)
-    │   └── log_decoder.py      (--map ww_log_map.json 还原)
-    ├── src/                    ← demo 模块，给 sim 跑通用（demo/ drivers/ test/）
-    └── examples/
-        └── main.c             ← 仿真主程序
+ww_log_v2/
+├── Makefile
+├── ww_log_map.json          ← 生成并提交（构建 + 解码共用）
+├── maps/                    ← 发版 map 归档，按 map_id 命名（make map-archive）
+├── scripts/log/
+│   ├── log_config.json      ← 唯一配置源：build 块 + 模块→目录
+│   ├── gen_log_map.py       ← 扫描 → map / file_ids.mk / auto_file_ids.h
+│   │                          / log_map_id.h / log_autoconf.h / 归档
+│   └── log_decoder.py       ← 离线解码（--map / --map-dir）
+├── include/log/
+│   ├── n_ww_log.h           ← 唯一公共入口
+│   ├── n_ww_log_def.h       ← 等级/阈值/编码位域/控制记录（最底层，无依赖）
+│   ├── n_ww_log_api.h       ← init + 运行期开关 + boot record
+│   ├── n_ww_log_output.h    ← 输出函数声明
+│   ├── n_ww_log_macro.h     ← N_LOG_* 与 N_*_IF_TRUE
+│   ├── n_ww_log_storage.h   ← RAM 环 + 外存几何
+│   └── n_ww_log_task.h
+├── log/                     ← 固件核心（control / output / ram / storage / task）
+├── sim/                     ← PC 仿真硬件壳（DLM RAM、flash/eeprom、分区表、version.h）
+├── src/                     ← demo / drivers / test 三个被登记的模块
+├── examples/main.c
+├── host_driver/             ← dora 部署（log_operation.py / log_tool.py / dora.py）
+└── output/                  ← 全部生成物（.gitignore）
 ```
 
-实现顺序建议：type.h → config/modules（开关）→ encode → backend(UART) → str → ram/storage/flush → panic → gen_log_map.py → decoder → examples/main.c。
+头文件分层是**无环**的：`def ← output ← macro`，`def ← api`，没有头文件 include 它的下游。
 
 ---
 
-## 8. sim 验收标准（必须达成）
+## 12. 验收标准
 
-v1 用 **gcc 在 PC** 上编译运行（`SIMULATION_MODE`，外存用 `sim/` 静态数组模拟）。完成判据：
-
-1. `cd ww_log_v1 && make && make run` 通过。
-2. 三种模式都能切换并正确运行：
-   - DISABLED：无 log 输出。
-   - STR：输出 `[INF] demo_init.c:26 - Hardware check passed, code=0` 这类可读行。
-   - ENCODE：输出 U32 hex 帧。
-3. 动态开关生效：关某模块 / 调 level 阈值后，对应 log 不再输出。
-4. encode + RAM + STORAGE：写入、达阈值 flush、热重启恢复路径都能跑。
-5. **decode 闭环**：encode 模式的 hex 输出 → `log_decoder.py --map ww_log_map.json` → 还原出与 STR 模式一致的可读日志（含参数代入 fmt）。
-6. `gen_log_map.py` 重跑两次（中间增删一个 .c）验证 **file_id 锁定**：已有文件 id 不变。
+1. `cd ww_log_v2 && make && make run` 通过
+2. **mode × backends 矩阵全绿**：3 种模式 × 4 种后端组合 = 12 项全部编译通过、零 FAIL
+3. 自检套件 `src/test/test_log.c`：**57 passed / 0 failed**（encode + 全后端）
+4. 动态开关生效（关模块 / 调 level 阈值后对应日志不再输出）
+5. encode + RAM + EXT：写入、达阈值 flush、热重启恢复、冷启动扫描重建 `write_off`
+6. **decode 闭环**：encode hex → decoder → 与 STR 模式逐字一致
+7. **跨版本闭环**：两个行号不同的构建产生的混合流，只给当前 map 时旧段被标记并显示 `<no map entry>`，给 `--map-dir` 时两段各用自己的 map 全部解对
+8. **增量编译**：改一个已登记 `.c` 只重编 1–3 个目标文件，空跑 0 个
+9. **整片镜像解码**：`ext_chip.bin`（含分区表）→ 自动定位 LOG 分区 → boot record 归属 → 正确解码
 
 ---
 
-## 9. 约定
+## 13. 约定
 
-- 类型用 `type.h` 的 `U8/U16/U32`（从 v0 拷贝）。
-- 命名沿用 v0：函数 `ww_log_<action>_<object>`，类型 `XXX_T/XXX_E`，配置宏 `WW_LOG_<FEATURE>`。
-- 宏务必 `do{}while(0)` 包裹。
-- 注释用 Doxygen 风格。
-- 平台：RISC-V（Andes N25），裸机/轻 RTOS，无动态内存，RAM 紧张，UART 为主调试口。注意临界区（环形缓冲指针操作要原子）。
-- 参考 v0 对应文件即可快速实现 ram/storage/flush/header，逻辑基本可复用，主要改动在编码格式（§2）和后端组合（§5）。
+- 类型用 `ww_type.h` 的 `U8/U16/U32`
+- 命名：函数 `n_ww_log_<action>_<object>` / `log_<action>_<object>`，类型 `XXX_T/XXX_E`，配置宏 `CONFIG_N_LOG_*` 与 `N_WW_LOG_*`
+- 宏务必 `do{}while(0)` 包裹
+- 注释 Doxygen 风格；**注释解释"为什么"，不复述代码**
+- 注意临界区（环形缓冲指针操作要原子）
+- 改了线上格式/编码，`ENCODING_TAG` 和 `compute_map_id` 的 canonical 序列化都要同步考虑
+
+---
+
+## 14. 已知遗留
+
+- **每模块 128 个 offset 的上限**：目前够用；真要突破得改位宽划分（如 4+8 = 16 模块 × 256 文件），那是编码格式变更，decoder 和已有归档 map 都要同步
+- **扫描器不剥注释**：被注释掉的 `N_LOG_xxx(...)` 仍会进 map。是无害的冗余 entry（永远不会被发出），但会污染 map
+- **`PART_TABLE_T` 布局待和真实固件核对**（见 §9）
+- **panic 未接入**（见 §10）

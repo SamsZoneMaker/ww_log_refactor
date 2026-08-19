@@ -23,6 +23,7 @@ WW_LOG_MAP  = ww_log_map.json
 FILE_IDS_MK = $(OUT_DIR)/file_ids.mk
 AUTO_HEADER = $(OUT_DIR)/auto_file_ids.h
 MAP_ID_H    = $(OUT_DIR)/log_map_id.h
+LOG_AUTOCONF= $(OUT_DIR)/log_autoconf.h
 GEN         = scripts/log/gen_log_map.py
 
 # Archive of released maps, indexed by map_id. The boot record in a log stream
@@ -105,6 +106,7 @@ $(FILE_IDS_MK): $(LOG_CONFIG) $(GEN) $(LOG_SRCS) $(LOG_SRC_DIRS)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --mapid  --write $(MAP_ID_H)
+	@$(PY) $(GEN) $(LOG_CONFIG) --autoconf --write $(LOG_AUTOCONF)
 
 $(AUTO_HEADER): $(FILE_IDS_MK)
 
@@ -117,6 +119,7 @@ map: $(LOG_CONFIG) $(GEN)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --mapid  --write $(MAP_ID_H)
+	@$(PY) $(GEN) $(LOG_CONFIG) --autoconf --write $(LOG_AUTOCONF)
 	@echo "Map regenerated."
 
 # Keep a copy of the CURRENT map under its map_id, for decoding logs produced by
