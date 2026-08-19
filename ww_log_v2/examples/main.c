@@ -47,7 +47,7 @@ int main(void)
     printf("  ww_log v2 Simulation\n");
     printf("=======================================\n");
 
-#if defined(CONFIG_N_LOG_MODE_DISABLED)
+#if defined(CONFIG_N_LOG_MODE_DISABLE)
     printf("  Mode: DISABLED\n");
 #elif defined(CONFIG_N_LOG_MODE_STRING)
     printf("  Mode: STRING\n");

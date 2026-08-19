@@ -53,6 +53,14 @@ extern "C"
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
+/* The external backend has no storage of its own: it drains the RAM ring
+ * (log_ram_pack_ext / log_ram_consume) under the ring's mutex. Selecting it
+ * without the RAM backend used to fail at link time with a bare "undefined
+ * reference to log_mutex_lock"; say so here instead. */
+#ifndef CONFIG_N_LOG_BACKEND_RAM
+#error "CONFIG_N_LOG_BACKEND_EXT_MEM requires CONFIG_N_LOG_BACKEND_RAM"
+#endif
+
 /* ================= External-storage container geometry (log-structured) =========
  *
  * The LOG partition is an append-only entry stream, NOT a fixed-slot ring:

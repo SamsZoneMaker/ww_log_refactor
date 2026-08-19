@@ -18,6 +18,8 @@
 #include "log/n_ww_log_macro.h"    /* N_RETURN_*_IF_TRUE + (via def) encode accessors */
 #include "log/n_ww_log_task.h"
 
+#ifdef CONFIG_N_LOG_BACKEND_RAM
+
 /*************************** static variable start ***************************/
 /* to be used only in this file */
 static LOG_RAM_BUFFER_T g_ram_buffer = {0};
@@ -599,3 +601,5 @@ U32 log_ram_get_flush_count(void)
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 
 /*************************** global function end *****************************/
+
+#endif /* CONFIG_N_LOG_BACKEND_RAM */

@@ -592,9 +592,13 @@ def emit_header(config, the_map):
     return '\n'.join(lines)
 
 
+# Names match the firmware's Kconfig symbols exactly (N_LOG_MODE_DISABLE has no
+# trailing D there); nothing in the log core keys off the disabled symbol -- it
+# is the #else fallthrough in n_ww_log_macro.h -- but the sim must agree with
+# the target so a config means the same thing in both.
 MODES = {'encode': 'CONFIG_N_LOG_MODE_ENCODE',
          'string': 'CONFIG_N_LOG_MODE_STRING',
-         'disabled': 'CONFIG_N_LOG_MODE_DISABLED'}
+         'disabled': 'CONFIG_N_LOG_MODE_DISABLE'}
 EXT_FULL_POLICIES = {'freeze': 'CONFIG_N_LOG_EXT_FULL_FREEZE',
                      'erase': 'CONFIG_N_LOG_EXT_FULL_ERASE'}
 
@@ -634,6 +638,19 @@ def emit_autoconf(config):
         sys.exit("Error: build.ext_full_policy must be one of %s, got %r"
                  % ('/'.join(sorted(EXT_FULL_POLICIES)), b.get('ext_full_policy')))
 
+    def boolean(name, key, default=True):
+        """Emit a Kconfig-shaped bool: `#define X 1` when on, NOTHING when off.
+
+        Kconfig omits unset bools entirely, and the log core tests these two
+        ways -- `#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM` in some files, `#if (... ==
+        1)` in others. Emitting `#define X 0` would satisfy the second and break
+        the first (RAM off would still compile the mutex/flush-task half in), so
+        match Kconfig rather than invent a third convention.
+        """
+        if b.get(key, default) if key else default:
+            return "#define %-29s 1" % name
+        return "/* %s is not set */" % name
+
     backends = b.get('backends', {})
     lines = [
         "/**",
@@ -651,15 +668,14 @@ def emit_autoconf(config):
         "#define %s" % MODES[mode],
         "",
         "/* ===== Backends ===== */",
-        "#define CONFIG_N_LOG_BACKEND_UART     %d" % (1 if backends.get('uart', True) else 0),
-        "#define CONFIG_N_LOG_BACKEND_RAM      %d" % (1 if backends.get('ram', True) else 0),
     ]
-    if backends.get('ext_mem', True):
-        lines.append("#define CONFIG_N_LOG_BACKEND_EXT_MEM  1")
-    else:
-        # EXT_MEM is tested with #ifdef, not its value, so it must be ABSENT
-        # rather than 0 when disabled.
-        lines.append("/* CONFIG_N_LOG_BACKEND_EXT_MEM is not set */")
+    for name, key in (('CONFIG_N_LOG_BACKEND_UART', 'uart'),
+                      ('CONFIG_N_LOG_BACKEND_RAM', 'ram'),
+                      ('CONFIG_N_LOG_BACKEND_EXT_MEM', 'ext_mem')):
+        if backends.get(key, True):
+            lines.append("#define %-29s 1" % name)
+        else:
+            lines.append("/* %s is not set */" % name)
 
     lines += [
         "",
@@ -672,10 +688,7 @@ def emit_autoconf(config):
         "/* ===== External storage ===== */",
         "#define %s" % EXT_FULL_POLICIES[policy],
     ]
-    if b.get('ext_flush_marker', True):
-        lines.append("#define CONFIG_N_LOG_EXT_FLUSH_MARKER")
-    else:
-        lines.append("/* CONFIG_N_LOG_EXT_FLUSH_MARKER is not set */")
+    lines.append(boolean('CONFIG_N_LOG_EXT_FLUSH_MARKER', 'ext_flush_marker'))
 
     lines += [
         "#define LOG_EXT_FLUSH_STAGE_SIZE      (%d)" % num('ext_flush_stage_size', 256),
