@@ -30,8 +30,19 @@ extern "C"
  * Compile-time level threshold. Logs with level > threshold are compiled out
  * entirely (zero code size). Override via -DN_WW_LOG_COMPILE_THRESHOLD=n.
  */
+/* Sources, in precedence order: an explicit -D, the firmware's Kconfig choice,
+ * then the default. The sim's generated log_autoconf.h defines the first form
+ * directly; a Kconfig build selects one of the CONFIG_* bools instead. */
 #ifndef N_WW_LOG_COMPILE_THRESHOLD
-#define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_DBG
+#  if   defined(CONFIG_N_LOG_COMPILE_THRESHOLD_ERR)
+#    define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_ERR
+#  elif defined(CONFIG_N_LOG_COMPILE_THRESHOLD_WRN)
+#    define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_WRN
+#  elif defined(CONFIG_N_LOG_COMPILE_THRESHOLD_INF)
+#    define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_INF
+#  else
+#    define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_DBG
+#  endif
 #endif
 
 /**
@@ -44,7 +55,15 @@ extern "C"
  *   = N_WW_LOG_LEVEL_DBG : persist everything to ext
  */
 #ifndef N_WW_LOG_EXT_LEVEL_THRESHOLD
-#define N_WW_LOG_EXT_LEVEL_THRESHOLD    N_WW_LOG_LEVEL_WRN
+#  if   defined(CONFIG_N_LOG_EXT_LEVEL_THRESHOLD_ERR)
+#    define N_WW_LOG_EXT_LEVEL_THRESHOLD  N_WW_LOG_LEVEL_ERR
+#  elif defined(CONFIG_N_LOG_EXT_LEVEL_THRESHOLD_INF)
+#    define N_WW_LOG_EXT_LEVEL_THRESHOLD  N_WW_LOG_LEVEL_INF
+#  elif defined(CONFIG_N_LOG_EXT_LEVEL_THRESHOLD_DBG)
+#    define N_WW_LOG_EXT_LEVEL_THRESHOLD  N_WW_LOG_LEVEL_DBG
+#  else
+#    define N_WW_LOG_EXT_LEVEL_THRESHOLD  N_WW_LOG_LEVEL_WRN
+#  endif
 #endif
 
 /* Number of runtime-maskable modules (g_ww_log_module_mask is a U32). */

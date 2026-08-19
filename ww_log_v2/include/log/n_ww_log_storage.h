@@ -24,11 +24,15 @@ extern "C"
 /* RAM buffer layout */
 #define LOG_RAM_HEADER_SIZE       sizeof(LOG_RAM_HEADER_T)  /* Header size in bytes */
 #define LOG_RAM_DATA_SIZE         (DLM_MAINTAIN_LOG_SIZE - LOG_RAM_HEADER_SIZE)
-/* Tuning knobs come from log_autoconf.h (generated from log_config.json), which
- * is force-included ahead of this header; the values here are the fallback for a
- * build that does not use the generator. */
+/* Tuning knobs, in precedence order: an explicit -D or the sim's generated
+ * log_autoconf.h (both define the bare name), then the firmware's Kconfig
+ * symbol, then the default here. */
 #ifndef LOG_RAM_FLUSH_THRESHOLD
-#define LOG_RAM_FLUSH_THRESHOLD   (480)   /* ~one ext block payload (512B slot) */
+#  ifdef CONFIG_N_LOG_RAM_FLUSH_THRESHOLD
+#    define LOG_RAM_FLUSH_THRESHOLD   (CONFIG_N_LOG_RAM_FLUSH_THRESHOLD)
+#  else
+#    define LOG_RAM_FLUSH_THRESHOLD   (480)  /* ~one ext block payload */
+#  endif
 #endif
 
 #define LOG_RAM_MAGIC             (0x574C4F47)
@@ -95,7 +99,11 @@ extern "C"
  * call and the static append buffer. The flush task re-arms while data remains,
  * so a backlog drains over successive calls. Must exceed one max entry (64B). */
 #ifndef LOG_EXT_FLUSH_STAGE_SIZE
-#define LOG_EXT_FLUSH_STAGE_SIZE  (256)
+#  ifdef CONFIG_N_LOG_EXT_FLUSH_STAGE_SIZE
+#    define LOG_EXT_FLUSH_STAGE_SIZE  (CONFIG_N_LOG_EXT_FLUSH_STAGE_SIZE)
+#  else
+#    define LOG_EXT_FLUSH_STAGE_SIZE  (256)
+#  endif
 #endif
 
 /* Ext-full policy: FREEZE stops flushing (preserves the earliest logs); ERASE

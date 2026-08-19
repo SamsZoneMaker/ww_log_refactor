@@ -26,19 +26,35 @@
 /* Mutex acquire timeout for the (RAM-backend) writer path. Lives outside the
  * EXT_MEM guard because log_mutex_lock() is compiled whenever RAM is on. */
 #ifndef LOG_WRITE_TIMEOUT_MS
-#define LOG_WRITE_TIMEOUT_MS         (6)
+#  ifdef CONFIG_N_LOG_WRITE_TIMEOUT_MS
+#    define LOG_WRITE_TIMEOUT_MS   (CONFIG_N_LOG_WRITE_TIMEOUT_MS)
+#  else
+#    define LOG_WRITE_TIMEOUT_MS   (6)
+#  endif
 #endif
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
 #ifndef LOG_FLUSH_TASK_STACK_SIZE
-#define LOG_FLUSH_TASK_STACK_SIZE    (256)
+#  ifdef CONFIG_N_LOG_FLUSH_TASK_STACK_SIZE
+#    define LOG_FLUSH_TASK_STACK_SIZE   (CONFIG_N_LOG_FLUSH_TASK_STACK_SIZE)
+#  else
+#    define LOG_FLUSH_TASK_STACK_SIZE   (256)
+#  endif
 #endif
 #ifndef LOG_FLUSH_TASK_PRIORITY
-#define LOG_FLUSH_TASK_PRIORITY      (1)
+#  ifdef CONFIG_N_LOG_FLUSH_TASK_PRIORITY
+#    define LOG_FLUSH_TASK_PRIORITY   (CONFIG_N_LOG_FLUSH_TASK_PRIORITY)
+#  else
+#    define LOG_FLUSH_TASK_PRIORITY   (1)
+#  endif
 #endif
 #ifndef LOG_FLUSH_TIMEOUT_MS
-#define LOG_FLUSH_TIMEOUT_MS         (10000)
+#  ifdef CONFIG_N_LOG_FLUSH_TIMEOUT_MS
+#    define LOG_FLUSH_TIMEOUT_MS   (CONFIG_N_LOG_FLUSH_TIMEOUT_MS)
+#  else
+#    define LOG_FLUSH_TIMEOUT_MS   (10000)
+#  endif
 #endif
 
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
