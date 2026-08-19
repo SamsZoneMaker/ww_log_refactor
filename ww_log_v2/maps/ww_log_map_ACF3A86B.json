@@ -1,9 +1,12 @@
 {
   "meta": {
-    "version": "",
+    "version": "0x00020000",
     "build_time": "2026-08-19T10:20:32Z",
     "encoding": "file12_line14_lvl2_pcnt4",
-    "map_id": "0xACF3A86B"
+    "map_id": "0xACF3A86B",
+    "fw_git_id": "0x5A1D0000",
+    "fw_time": "0x20260819",
+    "fw_version": "0x00020000"
   },
   "modules": {
     "1": {

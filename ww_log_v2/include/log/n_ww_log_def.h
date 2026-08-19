@@ -94,6 +94,37 @@ extern "C"
 
 #define N_WW_LOG_ENCODE_MAX_PARAMS     15
 
+/* ========= Control records =========
+ * Records the log module writes into its OWN stream, as opposed to entries a
+ * call site produced. They are ordinary entries as far as every walker is
+ * concerned (the pcnt field gives their length, so the cold-boot scan, the
+ * flush packer and the host decoder all step over them unchanged) -- they just
+ * use a file_id/line pair that no real call site can occupy:
+ *
+ *   file_id 0xFFF is never assigned to a source file (gen_log_map.py reserves
+ *   it), and lines 0x3FF0..0x3FFF inside it are the control namespace:
+ *
+ *     0x3FFF  flush marker  [hdr][tick]                        (8 bytes)
+ *     0x3FFE  boot record   [hdr][map_id][version][git_id]    (16 bytes)
+ *     0x3FF0..0x3FFD  free for future control records
+ *
+ * The boot record is what makes an archive that spans firmware updates
+ * decodable: it stamps each boot with the identity of the map that can decode
+ * the entries following it, so the host can switch maps at the right byte
+ * offset instead of decoding old entries with a new map (which silently
+ * produces plausible but wrong lines). It also marks reboot boundaries. */
+#define N_WW_LOG_CTRL_FILE_ID          0xFFF
+#define N_WW_LOG_CTRL_LINE_FLUSH       0x3FFF
+#define N_WW_LOG_CTRL_LINE_BOOT        0x3FFE
+
+/* [hdr][map_id][BUILD_VERSION][BUILD_GIT_ID]; level ERR so it always passes the
+ * ext-persist threshold and reaches external storage whatever it is set to. */
+#define N_WW_LOG_BOOT_RECORD_PCNT      3
+#define N_WW_LOG_BOOT_RECORD_HDR \
+    N_WW_LOG_ENCODE(N_WW_LOG_CTRL_FILE_ID, N_WW_LOG_CTRL_LINE_BOOT, \
+                    N_WW_LOG_LEVEL_ERR, N_WW_LOG_BOOT_RECORD_PCNT)
+#define N_WW_LOG_BOOT_RECORD_SIZE      (4 + N_WW_LOG_BOOT_RECORD_PCNT * 4)
+
 /*************************** macro definition end *****************************/
 
 #ifdef __cplusplus

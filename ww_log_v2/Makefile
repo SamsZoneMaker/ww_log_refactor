@@ -22,7 +22,14 @@ LOG_CONFIG  = scripts/log/log_config.json
 WW_LOG_MAP  = ww_log_map.json
 FILE_IDS_MK = $(OUT_DIR)/file_ids.mk
 AUTO_HEADER = $(OUT_DIR)/auto_file_ids.h
+MAP_ID_H    = $(OUT_DIR)/log_map_id.h
 GEN         = scripts/log/gen_log_map.py
+
+# Archive of released maps, indexed by map_id. The boot record in a log stream
+# names the map that decodes it; this is where the decoder finds that map for
+# firmware that is no longer the current build. Populated by `make map-archive`.
+MAP_ARCHIVE = maps
+VERSION_H   = sim/version.h
 
 # ---- Include paths ---------------------------------------------------------
 # sim/ comes FIRST so its ww_type.h, autoconf.h, FreeRTOS.h etc. shadow any
@@ -97,6 +104,7 @@ $(FILE_IDS_MK): $(LOG_CONFIG) $(GEN) $(LOG_SRCS) $(LOG_SRC_DIRS)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --mapid  --write $(MAP_ID_H)
 
 $(AUTO_HEADER): $(FILE_IDS_MK)
 
@@ -108,7 +116,17 @@ map: $(LOG_CONFIG) $(GEN)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --mapid  --write $(MAP_ID_H)
 	@echo "Map regenerated."
+
+# Keep a copy of the CURRENT map under its map_id, for decoding logs produced by
+# this build after it stops being the current build. Run it when you cut a
+# release -- not from the normal build, where every edit yields a fresh map_id
+# and would bury the releases under hundreds of throwaway maps.
+.PHONY: map-archive
+map-archive: $(FILE_IDS_MK)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) \
+		--archive $(MAP_ARCHIVE) --version-header $(VERSION_H)
 
 # ---- Build -----------------------------------------------------------------
 .PHONY: all

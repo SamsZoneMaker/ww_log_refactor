@@ -34,15 +34,24 @@ level IS encoded (2 bits) and read straight from the header; the map is only use
 for the file name + format string. %s parameters cannot be restored (only the
 pointer was stored); they are shown as a placeholder <%s@0xXXXXXXXX>.
 
+An external-storage archive deliberately survives firmware updates, so one
+stream can hold entries built from several different maps. Each boot stamps a
+boot record naming the map that decodes what follows; pass the archive written
+by `make map-archive` with --map-dir and every stretch is decoded with the map
+that actually produced it. Lines decoded with any other map are prefixed '?'.
+
 Usage:
   python3 log_decoder.py --map ww_log_map.json capture.txt       # hex text
   python3 log_decoder.py --map ww_log_map.json dump.bin          # binary
   make_run | python3 log_decoder.py --map ww_log_map.json -      # stdin
   python3 log_decoder.py --map ww_log_map.json --format bin part.bin
+  python3 log_decoder.py --map ww_log_map.json --map-dir maps/ dump.bin
 """
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import struct
 import sys
@@ -55,10 +64,14 @@ PART_MAGIC   = 0x474F4C58  # 'XLOG'  - LOG_EXT_PART_HDR_T at the ext partition b
 RAM_MAGIC_LE   = struct.pack('<I', RAM_MAGIC)
 PART_MAGIC_LE  = struct.pack('<I', PART_MAGIC)
 ERASED = 0xFFFFFFFF
-# Flush-batch marker header (n_ww_log_storage.h LOG_EXT_FLUSH_MARKER_HDR):
-# N_WW_LOG_ENCODE(file_id=0xFFF, line=0x3FFF, level=0, pcnt=1). Prepended to each
-# ext flush batch; its single U32 param is the FreeRTOS tick at flush time.
-FLUSH_MARKER = 0xFFFFFFC1
+
+# Control records (n_ww_log_def.h): entries the log module writes into its own
+# stream. file_id 0xFFF is never assigned to a source file, so these cannot
+# collide with a real call site; each carries a normal pcnt, so the entry walker
+# steps over them without knowing what they mean.
+CTRL_FILE_ID   = 0xFFF
+CTRL_LINE_FLUSH = 0x3FFF   # [hdr][tick]                      - one per flush batch
+CTRL_LINE_BOOT  = 0x3FFE   # [hdr][map_id][version][git_id]   - one per boot
 
 # RAM maintain region geometry (n_ww_log_storage.h). v2 header is 32 bytes.
 RAM_HEADER_SIZE = 32
@@ -204,6 +217,29 @@ def unescape(fmt):
     return fmt.replace('\x00', '\\').rstrip('\r\n')
 
 
+def compute_map_id(the_map):
+    """32-bit identity of a map. MUST match gen_log_map.py's compute_map_id().
+
+    Covers only what affects decoding (encode tag, file_id->path, and every
+    file_id/line/level/fmt) so that unrelated churn -- build_time, module enable
+    flags, JSON formatting -- does not invent a new identity. Because it is a
+    pure function of the map file, maps generated before meta.map_id existed can
+    still be indexed; the stored field is only a cross-check.
+    """
+    h = hashlib.sha256()
+    h.update(the_map.get('meta', {}).get('encoding', '').encode('utf-8'))
+    for fid in sorted(the_map.get('files', {}), key=int):
+        h.update(('\0F%d|%s' % (int(fid), the_map['files'][fid]['path']))
+                 .encode('utf-8'))
+    for e in sorted(the_map.get('entries', []),
+                    key=lambda e: (e['file_id'], e['line'])):
+        h.update(('\0E%d|%d|%s|%s'
+                  % (e['file_id'], e['line'], e['level'], e['fmt']))
+                 .encode('utf-8'))
+    mid = int.from_bytes(h.digest()[:4], 'big')
+    return 1 if mid in (0x00000000, 0xFFFFFFFF) else mid
+
+
 def build_index(the_map):
     entries = {(e['file_id'], e['line']): e for e in the_map.get('entries', [])}
     files = {int(k): v for k, v in the_map.get('files', {}).items()}
@@ -211,15 +247,49 @@ def build_index(the_map):
     return entries, files, modules, short_names(files)
 
 
+def load_map_set(paths, map_dir=None):
+    """Load every available map, keyed by map_id -> (index, path).
+
+    Returns (maps, default_id). The first --map given is the default: it decodes
+    stretches of stream whose map_id is unknown, and any stream with no boot
+    record at all (pre-boot-record archives).
+    """
+    maps, default_id = {}, None
+    candidates = list(paths)
+    if map_dir:
+        candidates += sorted(os.path.join(map_dir, f) for f in os.listdir(map_dir)
+                             if f.endswith('.json'))
+    for p in candidates:
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                the_map = json.load(f)
+        except FileNotFoundError:
+            sys.exit("Error: map file '%s' not found" % p)
+        except json.JSONDecodeError as e:
+            sys.exit("Error: invalid JSON in '%s': %s" % (p, e))
+        mid = compute_map_id(the_map)
+
+        stored = the_map.get('meta', {}).get('map_id')
+        if stored and int(str(stored), 16) != mid:
+            print("# WARNING: %s says map_id=%s but its content hashes to "
+                  "0x%08X (edited by hand?)" % (p, stored, mid))
+
+        maps.setdefault(mid, (build_index(the_map), p))
+        if default_id is None:
+            default_id = mid
+    return maps, default_id
+
+
 def format_frame(header, params, idx):
     """Turn one (header, params) frame into a readable line via the map index."""
     entries, _files, _modules, names = idx
 
-    if header == FLUSH_MARKER:                 # ext flush-batch boundary
+    file_id, line, level, pcnt = decode_header(header)
+
+    if file_id == CTRL_FILE_ID and line == CTRL_LINE_FLUSH:
         tick = params[0] if params else 0
         return ("----- flush @ tick=%u (0x%08X) -----" % (tick, tick))
 
-    file_id, line, level, pcnt = decode_header(header)
     params = params[:pcnt]
     lvl = LEVEL_NAMES[level]   # level comes straight from the encoded header
 
@@ -233,6 +303,59 @@ def format_frame(header, params, idx):
 
     return "[%s] %s:%d - %s" % (lvl, fname, line,
                                 render_fmt(unescape(entry.get('fmt', '')), params))
+
+
+def render_frames(frames, maps, default_id, raw=False):
+    """Decode a whole stream, switching maps at every boot record.
+
+    An archive deliberately survives firmware updates, so one stream can hold
+    entries built from several different maps. Decoding all of it with today's
+    map is the dangerous case: an old (file_id, line) usually still resolves to
+    SOME entry in the new map -- a different log statement that happens to sit
+    on that line now -- so the output looks reasonable and is wrong. The boot
+    record names the map that produced everything after it, so this walks
+    segment by segment and marks anything it cannot vouch for.
+
+    Lines decoded with a map that is not the one that produced them are
+    prefixed '?'. Entries ahead of the first boot record (archives written
+    before boot records existed) get the same treatment.
+    """
+    lines = []
+    cur_idx = maps[default_id][0] if default_id in maps else None
+    trusted = False            # no boot record seen yet -> map is a guess
+
+    for header, params in frames:
+        file_id, line, _level, pcnt = decode_header(header)
+
+        if file_id == CTRL_FILE_ID and line == CTRL_LINE_BOOT:
+            map_id = params[0] if len(params) > 0 else 0
+            version = params[1] if len(params) > 1 else 0
+            git_id = params[2] if len(params) > 2 else 0
+            if map_id in maps:
+                cur_idx, trusted = maps[map_id][0], True
+                lines.append("===== boot: map 0x%08X  version 0x%08X  git 0x%08X "
+                             "(%s) =====" % (map_id, version, git_id,
+                                             os.path.basename(maps[map_id][1])))
+            else:
+                trusted = False
+                lines.append("===== boot: map 0x%08X  version 0x%08X  git 0x%08X "
+                             "=====" % (map_id, version, git_id))
+                lines.append("# WARNING: no map with id 0x%08X was loaded; the "
+                             "lines below are decoded with the default map and "
+                             "may be WRONG (pass it via --map/--map-dir)"
+                             % map_id)
+            continue
+
+        if cur_idx is None:
+            lines.append("# ERROR: no map loaded")
+            continue
+
+        text = format_frame(header, params, cur_idx)
+        if raw:
+            text += ("    | 0x%08X " % header) + \
+                    ' '.join('0x%08X' % p for p in params[:pcnt])
+        lines.append(text if trusted else '?' + text)
+    return lines
 
 
 # ----------------------------------------------------------------------------
@@ -359,7 +482,15 @@ def read_input_bytes(path):
 
 def main():
     ap = argparse.ArgumentParser(description="ww_log v1 encode-mode decoder")
-    ap.add_argument('--map', required=True, help='path to ww_log_map.json')
+    ap.add_argument('--map', action='append', default=[], metavar='PATH',
+                    help='path to a ww_log_map.json. Repeatable; the first one '
+                         'is the default used for stream segments whose map_id '
+                         'is unknown.')
+    ap.add_argument('--map-dir', metavar='DIR',
+                    help='also load every *.json in DIR as a map (the archive '
+                         'written by `make map-archive`). Maps are indexed by '
+                         'map_id, so a log stream spanning several firmware '
+                         'versions decodes each segment with its own map.')
     ap.add_argument('input', nargs='?',
                     help="hex/text or binary dump, or '-' for stdin")
     ap.add_argument('--hex', dest='hex_str', metavar='"0x.. 0x.."',
@@ -377,16 +508,12 @@ def main():
 
     if not args.hex_str and not args.input:
         ap.error("provide an input file/'-' , or --hex \"0x..\"")
+    if not args.map and not args.map_dir:
+        ap.error("provide at least one --map or a --map-dir")
 
-    try:
-        with open(args.map, 'r', encoding='utf-8') as f:
-            the_map = json.load(f)
-    except FileNotFoundError:
-        sys.exit("Error: map file '%s' not found" % args.map)
-    except json.JSONDecodeError as e:
-        sys.exit("Error: invalid JSON in '%s': %s" % (args.map, e))
-
-    idx = build_index(the_map)
+    maps, default_id = load_map_set(args.map, args.map_dir)
+    if default_id is None:
+        sys.exit("Error: no maps loaded")
 
     if args.hex_str:
         data = args.hex_str.encode('utf-8')
@@ -406,13 +533,8 @@ def main():
     for note in notes:
         print(note)
 
-    decoded_lines = []
-    for header, params in frames:
-        line = format_frame(header, params, idx)
-        if args.raw:
-            line += ("    | 0x%08X " % header) + \
-                    ' '.join('0x%08X' % p for p in params[:header & 0xF])
-        decoded_lines.append(line)
+    decoded_lines = render_frames(frames, maps, default_id, args.raw)
+    for line in decoded_lines:
         print(line)
 
     if args.output:

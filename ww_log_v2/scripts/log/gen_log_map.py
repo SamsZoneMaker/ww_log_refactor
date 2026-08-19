@@ -17,6 +17,8 @@ Modes:
   gen_log_map.py <config> [--out ww_log_map.json]   scan + (re)write the map
   gen_log_map.py <config> --makefile                derive build/file_ids.mk  (stdout)
   gen_log_map.py <config> --header                  derive auto_file_ids.h    (stdout)
+  gen_log_map.py <config> --mapid                   derive log_map_id.h       (stdout)
+  gen_log_map.py <config> --archive <dir>           archive the map as <dir>/ww_log_map_<id>.json
 
 Options:
   --root <path>   project root used to resolve dirs in config and to anchor
@@ -26,11 +28,16 @@ Options:
                   script is write-if-changed, which is what keeps a source edit
                   (new line numbers, same file IDs) from touching file_ids.mk /
                   auto_file_ids.h and forcing a full rebuild.
+  --version-header <path>  with --archive: read BUILD_VERSION / BUILD_GIT_ID /
+                  BUILD_TIME out of the project's generated version.h and stamp
+                  them into the archived copy, so an archived map says which
+                  firmware release it belongs to.
 
-The --makefile / --header modes DERIVE from an existing ww_log_map.json
-(generate it first).  Encoding tag: file12_line14_lvl2_pcnt4.
+The --makefile / --header / --mapid modes DERIVE from an existing
+ww_log_map.json (generate it first).  Encoding tag: file12_line14_lvl2_pcnt4.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -119,6 +126,65 @@ def disambiguate_names(paths):
             break
     for p in todo:                       # identical full paths: cannot happen
         out[p] = norm(p)
+    return out
+
+
+# file_id 0xFFF is reserved for control records written into the log stream
+# itself (flush marker, boot record -- see n_ww_log_def.h). Never hand it to a
+# real source file, or a log at a high line number in that file would be
+# indistinguishable from a control record.
+RESERVED_FILE_ID = 0xFFF
+
+
+def compute_map_id(the_map):
+    """32-bit identity of a map: hash of everything that affects DECODING.
+
+    Covered: the encode layout tag, every (file_id -> path), and every
+    (file_id, line, level, fmt). Deliberately NOT covered: meta (build_time,
+    the stored map_id itself), module enable flags, JSON key order and
+    formatting, and the derived 'short' names -- changing those cannot change
+    what a decoded line says, and folding them in would raise false "map
+    mismatch" alarms.
+
+    Two consequences worth knowing:
+      * The id is a pure function of the map file, so a map produced BEFORE
+        this field existed can still be indexed by recomputing it. meta.map_id
+        is only a cross-check.
+      * The serialisation below is therefore frozen. Changing it re-labels
+        every archived map.
+    """
+    h = hashlib.sha256()
+    h.update(the_map.get('meta', {}).get('encoding', ENCODING_TAG).encode('utf-8'))
+    for fid in sorted(the_map.get('files', {}), key=int):
+        h.update(('\0F%d|%s' % (int(fid), the_map['files'][fid]['path']))
+                 .encode('utf-8'))
+    for e in sorted(the_map.get('entries', []),
+                    key=lambda e: (e['file_id'], e['line'])):
+        h.update(('\0E%d|%d|%s|%s'
+                  % (e['file_id'], e['line'], e['level'], e['fmt']))
+                 .encode('utf-8'))
+    mid = int.from_bytes(h.digest()[:4], 'big')
+    # 0 reads as "uninitialised" and 0xFFFFFFFF as "erased flash" once this
+    # lands in a log stream; neither may be a legitimate id.
+    return 1 if mid in (0x00000000, 0xFFFFFFFF) else mid
+
+
+def parse_version_header(path):
+    """Pull the U32 BUILD_* defines out of the project's generated version.h."""
+    out = {}
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            text = f.read()
+    except OSError as e:
+        print("Warning: cannot read %s: %s" % (path, e), file=sys.stderr)
+        return out
+    for name in ('BUILD_VERSION', 'BUILD_GIT_ID', 'BUILD_TIME'):
+        m = re.search(r'^\s*#\s*define\s+%s\s+(\S+)' % name, text, re.M)
+        if m:
+            try:
+                out[name] = int(m.group(1).rstrip('uUlL'), 0)
+            except ValueError:
+                pass
     return out
 
 
@@ -371,10 +437,13 @@ def generate(config, old_map, root='.'):
 
     def next_offset(mod):
         used = reserved.setdefault(mod, set())
-        for i in range(128):
+        # Stop one short in the last module so file_id 0xFFF stays reserved for
+        # control records (see RESERVED_FILE_ID).
+        limit = 128 - 1 if modules[mod]['id'] * 128 + 127 == RESERVED_FILE_ID else 128
+        for i in range(limit):
             if i not in used:
                 return i
-        sys.exit("Error: module '%s' exhausted its 128 file slots" % mod)
+        sys.exit("Error: module '%s' exhausted its %d file slots" % (mod, limit))
 
     files = {}        # file_id(int) -> {path, module, present}
     unregistered = []
@@ -437,7 +506,7 @@ def generate(config, old_map, root='.'):
         out_files[str(fid)] = files[fid]
 
     version = (old_map or {}).get('meta', {}).get('version', "")
-    return {
+    the_map = {
         "meta": {
             "version": version,
             "build_time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -447,6 +516,10 @@ def generate(config, old_map, root='.'):
         "files": out_files,
         "entries": entries,
     }
+    # Stamped last: meta is excluded from the hash, so writing the id back in
+    # does not disturb it.
+    the_map["meta"]["map_id"] = "0x%08X" % compute_map_id(the_map)
+    return the_map
 
 
 # ----------------------------------------------------------------------------
@@ -515,6 +588,68 @@ def emit_header(config, the_map):
     return '\n'.join(lines)
 
 
+def emit_map_id(the_map):
+    """The one generated header carrying the map identity into the firmware.
+
+    Included by exactly ONE .c (n_ww_log_control.c, which writes the boot
+    record). It must NOT be a global -D: make compares file timestamps and does
+    not track command lines, so a -D would leave a stale id compiled in
+    whenever the map changed but no source file did -- defeating the entire
+    point of the id.
+    """
+    return '\n'.join([
+        "/**",
+        " * @file log_map_id.h",
+        " * @brief Auto-generated identity of ww_log_map.json. DO NOT EDIT.",
+        " *",
+        " * Stamped into every boot record so the host can tell which map decodes",
+        " * which stretch of the log archive. Generated by scripts/log/gen_log_map.py.",
+        " */",
+        "",
+        "#ifndef LOG_MAP_ID_H",
+        "#define LOG_MAP_ID_H",
+        "",
+        "#define N_WW_LOG_MAP_ID    0x%08Xu" % compute_map_id(the_map),
+        "",
+        "#endif /* LOG_MAP_ID_H */",
+    ])
+
+
+def archive_map(the_map, out_dir, version_header=None):
+    """Copy the current map into the archive as ww_log_map_<map_id>.json.
+
+    This is what makes cross-version decoding actually work: the boot record in
+    the log stream names a map_id, and the decoder can only honour it if a map
+    with that id was kept somewhere. Deliberately NOT automatic -- during
+    development every edit produces a new map_id, so archiving on each build
+    would bury the useful releases in hundreds of throwaway maps. Run it when
+    you cut a release.
+    """
+    mid = compute_map_id(the_map)
+    dst = os.path.join(out_dir, "ww_log_map_%08X.json" % mid)
+
+    if version_header:
+        vinfo = parse_version_header(version_header)
+        if vinfo:
+            # fw_* prefix on purpose: the map already has its own build_time
+            # (when the map was generated), which is not the firmware's.
+            the_map = dict(the_map, meta=dict(the_map.get('meta', {})))
+            for k, v in sorted(vinfo.items()):
+                the_map['meta']['fw_' + k[len('BUILD_'):].lower()] = "0x%08X" % v
+            if 'BUILD_VERSION' in vinfo:
+                the_map['meta']['version'] = "0x%08X" % vinfo['BUILD_VERSION']
+
+    if os.path.exists(dst):
+        print("Already archived: %s (map_id 0x%08X)" % (dst, mid), file=sys.stderr)
+        return
+    os.makedirs(out_dir, exist_ok=True)
+    with open(dst, 'w', encoding='utf-8') as f:
+        json.dump(the_map, f, indent=2, ensure_ascii=False)
+        f.write('\n')
+    print("Archived %s (map_id 0x%08X, %d entries)"
+          % (dst, mid, len(the_map.get('entries', []))), file=sys.stderr)
+
+
 # ----------------------------------------------------------------------------
 # main
 # ----------------------------------------------------------------------------
@@ -546,12 +681,25 @@ def main():
         elif write_if_changed(write_to, text + '\n'):
             print("Updated %s" % write_to, file=sys.stderr)
 
-    if "--makefile" in flags or "--header" in flags:
+    if "--archive" in flags:
         the_map = load_json(map_path)
         if the_map is None:
             sys.exit("Error: %s missing; run generate first" % map_path)
-        emit(emit_makefile(config, the_map) if "--makefile" in flags
-             else emit_header(config, the_map))
+        vh = (flags[flags.index("--version-header") + 1]
+              if "--version-header" in flags else None)
+        archive_map(the_map, flags[flags.index("--archive") + 1], vh)
+        return
+
+    if "--makefile" in flags or "--header" in flags or "--mapid" in flags:
+        the_map = load_json(map_path)
+        if the_map is None:
+            sys.exit("Error: %s missing; run generate first" % map_path)
+        if "--makefile" in flags:
+            emit(emit_makefile(config, the_map))
+        elif "--header" in flags:
+            emit(emit_header(config, the_map))
+        else:
+            emit(emit_map_id(the_map))
         return
 
     # default: scan + (re)generate map

@@ -1682,20 +1682,24 @@ class DORA:
 #############################################################
 # log decode (ww_log v1)
 #############################################################
-    def __board_log_get(self, v_map, v_boardId=0):
+    def __board_log_get(self, v_map, v_boardId=0, v_mapDir=None):
         import api.log_operation as log_operation
         # ensure the jtag channel is up (reads go through f_csr_byte_rd /
         # f_flash_read / f_eeprom_read, all of which need it)
         self.__board_handle_get_jtag(v_boardId)
-        return log_operation.Log(self, v_map, boardId=v_boardId)
+        return log_operation.Log(self, v_map, boardId=v_boardId,
+                                 map_dir=v_mapDir)
 
     def f_log_decode_ram(self, v_map, v_addr, v_length=4096,
-                         v_raw=False, v_output=None, v_hex=False, v_boardId=0):
+                         v_raw=False, v_output=None, v_hex=False, v_boardId=0,
+                         v_mapDir=None):
         '''
         -> 直接读取掉电保持 RAM 区(DLM maintain region)的 encode 日志并 decode
 
         参数
-            v_map    - 必选   ww_log_map.json 路径
+            v_map    - 必选   ww_log_map.json 路径(当前版本)
+            v_mapDir - 可选   历史 map 归档目录(make map-archive 产出);
+                              日志跨固件版本时, 每段用产生它的那份 map 解
             v_addr   - 必选   RAM 区内存地址(__dlm_log_start 的值)
             v_length - 可选   读取字节数, 默认 4096(一个 maintain region)
             v_raw    - 可选   每行后附带原始帧
@@ -1703,16 +1707,19 @@ class DORA:
                               .dump/.bin -> 原始 log 字节(不解析); .txt/.log/其它 -> 文本
             v_hex    - 可选   只按 4 个 U32/行 打印原始 encode 字, 不 decode
         '''
-        log = self.__board_log_get(v_map, v_boardId)
+        log = self.__board_log_get(v_map, v_boardId, v_mapDir)
         return log.f_decode_ram(v_addr, v_length, v_raw, v_output, v_hex)
 
     def f_log_decode_flash(self, v_map, v_offset=0x0, v_length=4096,
-                           v_raw=False, v_output=None, v_hex=False, v_boardId=0):
+                           v_raw=False, v_output=None, v_hex=False, v_boardId=0,
+                           v_mapDir=None):
         '''
         -> 直接读取 flash 上 LOG 分区(4KB)的 encode 日志('XLOG' append log)并 decode
 
         参数
-            v_map    - 必选   ww_log_map.json 路径
+            v_map    - 必选   ww_log_map.json 路径(当前版本)
+            v_mapDir - 可选   历史 map 归档目录(make map-archive 产出);
+                              日志跨固件版本时, 每段用产生它的那份 map 解
             v_offset - 可选   flash 内偏移, 默认 0x0
             v_length - 可选   读取字节数, 默认 4096
             v_raw    - 可选   每行后附带原始帧
@@ -1720,17 +1727,18 @@ class DORA:
                               .dump/.bin -> 原始 log 字节(不解析); .txt/.log/其它 -> 文本
             v_hex    - 可选   只按 4 个 U32/行 打印原始 encode 字, 不 decode
         '''
-        log = self.__board_log_get(v_map, v_boardId)
+        log = self.__board_log_get(v_map, v_boardId, v_mapDir)
         return log.f_decode_flash(v_offset, v_length, v_raw, v_output, v_hex)
 
     def f_log_decode_eeprom(self, v_map, v_offset=0x0, v_length=21 * 1024,
                             v_raw=False, v_output=None, v_hex=False,
-                            v_boardId=0, v_devAddr=None):
+                            v_boardId=0, v_devAddr=None, v_mapDir=None):
         '''
         -> 直接读取 eeprom 上 LOG 分区(21KB)的 encode 日志('XLOG' append log)并 decode
 
         参数
-            v_map     - 必选   ww_log_map.json 路径
+            v_map     - 必选   ww_log_map.json 路径(当前版本)
+            v_mapDir  - 可选   历史 map 归档目录(make map-archive 产出)
             v_offset  - 可选   eeprom 内偏移, 默认 0x0
             v_length  - 可选   读取字节数, 默认 21KB
             v_raw     - 可选   每行后附带原始帧
@@ -1738,6 +1746,6 @@ class DORA:
             v_hex     - 可选   只按 4 个 U32/行 打印原始 encode 字, 不 decode
             v_devAddr - 可选   eeprom I2C 7-bit 地址(0x50-0x57), 不指定则自动扫描
         '''
-        log = self.__board_log_get(v_map, v_boardId)
+        log = self.__board_log_get(v_map, v_boardId, v_mapDir)
         return log.f_decode_eeprom(v_offset, v_length, v_devAddr,
                                    v_raw, v_output, v_hex)

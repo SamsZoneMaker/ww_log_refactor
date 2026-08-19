@@ -96,7 +96,8 @@ def cmd_ram(args, dora):
         v_raw=args.raw,
         v_output=_resolve_output(args),
         v_hex=args.hexdump,
-        v_boardId=args.board)
+        v_boardId=args.board,
+        v_mapDir=args.map_dir)
 
 
 def cmd_flash(args, dora):
@@ -107,7 +108,8 @@ def cmd_flash(args, dora):
         v_raw=args.raw,
         v_output=_resolve_output(args),
         v_hex=args.hexdump,
-        v_boardId=args.board)
+        v_boardId=args.board,
+        v_mapDir=args.map_dir)
 
 
 def cmd_eeprom(args, dora):
@@ -119,6 +121,7 @@ def cmd_eeprom(args, dora):
         v_output=_resolve_output(args),
         v_hex=args.hexdump,
         v_boardId=args.board,
+        v_mapDir=args.map_dir,
         v_devAddr=args.dev_addr)
 
 
@@ -127,7 +130,14 @@ def cmd_eeprom(args, dora):
 # ---------------------------------------------------------------------------
 
 def _add_common(p, default_len):
-    p.add_argument('--map', required=True, help='Path to ww_log_map.json')
+    p.add_argument('--map', required=True,
+                   help='Path to ww_log_map.json (the current build)')
+    p.add_argument('--map-dir', default=None, metavar='DIR',
+                   help='Directory of archived maps (make map-archive). A log '
+                        'archive survives firmware updates, so one read can '
+                        'span several builds; with the archive present each '
+                        'stretch is decoded with the map that produced it, and '
+                        'anything decoded with a different map is marked')
     p.add_argument('--length', default=default_len,
                    help='Bytes to read (default: %s = the whole LOG region)'
                         % default_len)

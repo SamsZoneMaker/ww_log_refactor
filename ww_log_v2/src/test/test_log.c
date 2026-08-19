@@ -17,6 +17,11 @@
 #include "dlm_layout.h"
 #include "test_in.h"
 
+#ifdef CONFIG_N_LOG_MODE_ENCODE
+#include "log_map_id.h"   /* generated: N_WW_LOG_MAP_ID (boot-record test) */
+#include "version.h"      /* project:   BUILD_VERSION / BUILD_GIT_ID       */
+#endif
+
 /* ====================================================================== */
 /* tiny check framework                                                    */
 /* ====================================================================== */
@@ -307,6 +312,60 @@ static void test_ext_resume(void)
     log_ext_mem_clear();
 }
 
+/**
+ * The boot record is what lets a host decode an archive that spans firmware
+ * updates: n_ww_log_init() stamps one into the stream, naming the map that can
+ * decode everything after it. Two properties have to hold or cross-version
+ * decoding silently produces plausible-but-wrong lines:
+ *   - it is a well-formed entry (pcnt=3), so every walker steps over it;
+ *   - it reaches EXTERNAL storage, not just the RAM ring -- which it only does
+ *     because its level is ERR and therefore always passes the ext threshold.
+ */
+static void test_boot_record(void)
+{
+    section("Boot record: map identity reaches the archive");
+    if (log_ext_mem_available() != WW_TRUE)
+    {
+        CHECK(0, "external storage available");
+        return;
+    }
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+
+    U32 base_off = log_ext_get_write_offset();
+
+    /* Re-run just the stamping half of init (the ring is already up). */
+    n_ww_log_init();
+
+    CHECK(get_current_usage() == N_WW_LOG_BOOT_RECORD_SIZE,
+          "boot record is 16B in the RAM ring");
+    CHECK(*(U32 *)log_ram_get_data_ptr() == (U32)N_WW_LOG_BOOT_RECORD_HDR,
+          "ring holds the boot record header");
+    CHECK(N_WW_LOG_PCNT_OF(N_WW_LOG_BOOT_RECORD_HDR) == 3,
+          "boot record declares pcnt=3 (walkers skip it)");
+    CHECK(N_WW_LOG_LEVEL_OF(N_WW_LOG_BOOT_RECORD_HDR) == N_WW_LOG_LEVEL_ERR,
+          "boot record is ERR (always passes the ext threshold)");
+
+    int guard = 0;
+    while (log_ram_get_pending_len() > 0 && guard++ < 2000)
+    {
+        if (log_ram_flush() != LOG_EXT_OK) { break; }
+    }
+
+    /* No flush marker is armed here, so the record sits right after the
+     * partition header. */
+    static U8 buf[64];
+    log_ext_mem_read(buf, sizeof(buf));
+    U32 *w = (U32 *)(buf + LOG_EXT_PART_HDR_SIZE);
+    CHECK(log_ext_get_write_offset() > base_off, "boot record persisted to ext");
+    CHECK(w[0] == (U32)N_WW_LOG_BOOT_RECORD_HDR, "archive starts with the boot record");
+    CHECK(w[1] == (U32)N_WW_LOG_MAP_ID,          "archive carries this build's map_id");
+    CHECK(w[2] == (U32)BUILD_VERSION,            "archive carries BUILD_VERSION");
+    CHECK(w[3] == (U32)BUILD_GIT_ID,             "archive carries BUILD_GIT_ID");
+
+    log_ext_mem_clear();
+}
+
 #if defined(CONFIG_N_LOG_EXT_FLUSH_MARKER)
 static void test_ext_flush_marker(void)
 {
@@ -384,6 +443,9 @@ int test_log_run_all(void)
     test_ext_flush();
     test_ext_level_filter();
     test_ext_resume();
+#if defined(CONFIG_N_LOG_MODE_ENCODE)
+    test_boot_record();
+#endif
 #if defined(CONFIG_N_LOG_EXT_FLUSH_MARKER)
     test_ext_flush_marker();
 #endif

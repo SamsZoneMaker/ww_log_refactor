@@ -16,6 +16,7 @@ extern "C"
 // #include ""
 #include <stdbool.h>
 #include "dlm_layout.h"
+#include "n_ww_log_def.h"    /* encode layout + control-record namespace */
 #include "n_ww_log_task.h"
 
 /*************************** macro definition start ***************************/
@@ -89,11 +90,14 @@ extern "C"
  * An 8-byte record [LOG_EXT_FLUSH_MARKER_HDR][U32 tick] is prepended to the first
  * data-bearing flush of each flush-task wake, so the host decoder can split the
  * append stream into per-flush batches AND spot reboots (the tick resets to ~0).
- * The header value is N_WW_LOG_ENCODE(file_id=0xFFF, line=0x3FFF, level=0, pcnt=1):
- * real code never emits max-file_id together with max-line, yet it is distinct
- * from the 0xFFFFFFFF erased word, and its pcnt=1 makes the generic entry walker
- * and the cold-boot scan skip it transparently as a normal 8-byte entry. */
-#define LOG_EXT_FLUSH_MARKER_HDR  (0xFFFFFFC1u)
+ * It is a control record (see n_ww_log_def.h): file_id 0xFFF is reserved from
+ * ever being assigned to a source file, so the pair cannot collide with a real
+ * call site, it is distinct from the 0xFFFFFFFF erased word, and its pcnt=1
+ * makes the generic entry walker and the cold-boot scan skip it transparently
+ * as a normal 8-byte entry. */
+#define LOG_EXT_FLUSH_MARKER_HDR \
+    N_WW_LOG_ENCODE(N_WW_LOG_CTRL_FILE_ID, N_WW_LOG_CTRL_LINE_FLUSH, \
+                    N_WW_LOG_LEVEL_ERR, 1)          /* == 0xFFFFFFC1 */
 #define LOG_EXT_FLUSH_MARKER_SIZE (8)   /* header U32 + tick U32 */
 
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */

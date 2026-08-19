@@ -33,6 +33,7 @@ for the file name + format string. %s params cannot be restored (only the pointe
 was stored) -> shown as <%s@0xXXXXXXXX>.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -52,10 +53,15 @@ LEVEL_NAMES = ("ERR", "WRN", "INF", "DBG")
 
 RAM_MAGIC      = 0x574C4F47          # 'WLOG' - LOG_RAM_HEADER_T at region start
 PART_MAGIC     = 0x474F4C58          # 'XLOG' - LOG_EXT_PART_HDR_T at partition base
-# Flush-batch marker header (n_ww_log_storage.h LOG_EXT_FLUSH_MARKER_HDR):
-# N_WW_LOG_ENCODE(file_id=0xFFF, line=0x3FFF, level=0, pcnt=1). Prepended to each
-# ext flush batch; its single U32 param is the FreeRTOS tick at flush time.
-FLUSH_MARKER   = 0xFFFFFFC1
+# Control records (n_ww_log_def.h): entries the log module writes into its own
+# stream. file_id 0xFFF is never assigned to a source file, so they cannot
+# collide with a real call site; each carries a normal pcnt so the entry walker
+# steps over them without knowing what they mean.
+#   line 0x3FFF  flush marker  [hdr][tick]
+#   line 0x3FFE  boot record   [hdr][map_id][BUILD_VERSION][BUILD_GIT_ID]
+CTRL_FILE_ID    = 0xFFF
+CTRL_LINE_FLUSH = 0x3FFF
+CTRL_LINE_BOOT  = 0x3FFE
 RAM_MAGIC_LE   = struct.pack('<I', RAM_MAGIC)
 PART_MAGIC_LE  = struct.pack('<I', PART_MAGIC)
 ERASED         = 0xFFFFFFFF
@@ -218,6 +224,29 @@ def unescape(fmt):
     return fmt.replace('\x00', '\\').rstrip('\r\n')
 
 
+def compute_map_id(the_map):
+    """32-bit identity of a map. MUST match gen_log_map.py's compute_map_id().
+
+    Covers only what affects decoding (encode tag, file_id->path, and every
+    file_id/line/level/fmt), so unrelated churn -- build_time, module enable
+    flags, JSON formatting -- does not invent a new identity. Being a pure
+    function of the map file, it also works on maps generated before
+    meta.map_id existed; the stored field is only a cross-check.
+    """
+    h = hashlib.sha256()
+    h.update(the_map.get('meta', {}).get('encoding', '').encode('utf-8'))
+    for fid in sorted(the_map.get('files', {}), key=int):
+        h.update(('\0F%d|%s' % (int(fid), the_map['files'][fid]['path']))
+                 .encode('utf-8'))
+    for e in sorted(the_map.get('entries', []),
+                    key=lambda e: (e['file_id'], e['line'])):
+        h.update(('\0E%d|%d|%s|%s'
+                  % (e['file_id'], e['line'], e['level'], e['fmt']))
+                 .encode('utf-8'))
+    mid = int.from_bytes(h.digest()[:4], 'big')
+    return 1 if mid in (0x00000000, 0xFFFFFFFF) else mid
+
+
 def build_index(the_map):
     entries = {(e['file_id'], e['line']): e for e in the_map.get('entries', [])}
     files = {int(k): v for k, v in the_map.get('files', {}).items()}
@@ -225,15 +254,88 @@ def build_index(the_map):
     return entries, files, modules, short_names(files)
 
 
+def load_map_set(map_path, map_dir=None):
+    """Load every available map, keyed by map_id -> (index, path).
+
+    Returns (maps, default_id). `map_path` is the default: it decodes stretches
+    whose map_id is unknown, and any stream with no boot record at all.
+    """
+    maps, default_id = {}, None
+    candidates = [map_path]
+    if map_dir:
+        candidates += sorted(os.path.join(map_dir, f)
+                             for f in os.listdir(map_dir) if f.endswith('.json'))
+    for p in candidates:
+        with open(p, 'r', encoding='utf-8') as f:
+            the_map = json.load(f)
+        mid = compute_map_id(the_map)
+        stored = the_map.get('meta', {}).get('map_id')
+        if stored and int(str(stored), 16) != mid:
+            print("# WARNING: %s says map_id=%s but hashes to 0x%08X"
+                  % (p, stored, mid))
+        maps.setdefault(mid, (build_index(the_map), p))
+        if default_id is None:
+            default_id = mid
+    return maps, default_id
+
+
+def render_frames(frames, maps, default_id, raw=False):
+    """Decode a whole stream, switching maps at every boot record.
+
+    An archive deliberately survives firmware updates, so one stream can hold
+    entries built from several maps. Decoding all of it with today's map is the
+    dangerous case: an old (file_id, line) usually still resolves to SOME entry
+    in the new map -- a different statement that now sits on that line -- so the
+    output looks reasonable and is wrong. The boot record names the map that
+    produced everything after it; lines decoded with any other map are prefixed
+    '?', as are entries ahead of the first boot record.
+    """
+    lines = []
+    cur_idx = maps[default_id][0] if default_id in maps else None
+    trusted = False
+
+    for header, params in frames:
+        file_id, line, _level, pcnt = decode_header(header)
+
+        if file_id == CTRL_FILE_ID and line == CTRL_LINE_BOOT:
+            map_id = params[0] if len(params) > 0 else 0
+            version = params[1] if len(params) > 1 else 0
+            git_id = params[2] if len(params) > 2 else 0
+            if map_id in maps:
+                cur_idx, trusted = maps[map_id][0], True
+                lines.append("===== boot: map 0x%08X  version 0x%08X  git 0x%08X "
+                             "(%s) =====" % (map_id, version, git_id,
+                                             os.path.basename(maps[map_id][1])))
+            else:
+                trusted = False
+                lines.append("===== boot: map 0x%08X  version 0x%08X  git 0x%08X "
+                             "=====" % (map_id, version, git_id))
+                lines.append("# WARNING: no map with id 0x%08X was loaded; the "
+                             "lines below are decoded with the default map and "
+                             "may be WRONG" % map_id)
+            continue
+
+        if cur_idx is None:
+            lines.append("# ERROR: no map loaded")
+            continue
+
+        text = format_frame(header, params, cur_idx)
+        if raw:
+            text += ("    | 0x%08X " % header) + \
+                    ' '.join('0x%08X' % p for p in params[:pcnt])
+        lines.append(text if trusted else '?' + text)
+    return lines
+
+
 def format_frame(header, params, idx):
     """Turn one (header, params) frame into a readable line via the map index."""
     entries, _files, _modules, names = idx
 
-    if header == FLUSH_MARKER:                 # ext flush-batch boundary
+    file_id, line, level, pcnt = decode_header(header)
+
+    if file_id == CTRL_FILE_ID and line == CTRL_LINE_FLUSH:
         tick = params[0] if params else 0
         return ("----- flush @ tick=%u (0x%08X) -----" % (tick, tick))
-
-    file_id, line, level, pcnt = decode_header(header)
     params = params[:pcnt]
     lvl = LEVEL_NAMES[level]   # level comes straight from the encoded header
 
@@ -388,16 +490,18 @@ class Log:
     Args:
         dora      - the DORA instance (provides f_csr_byte_rd / f_flash_read /
                     f_eeprom_read).
-        map_path  - path to ww_log_map.json.
+        map_path  - path to ww_log_map.json (the current build's map).
+        map_dir   - optional directory of archived maps (`make map-archive`).
+                    A log archive survives firmware updates, so one read can
+                    span several builds; with the archive present each stretch
+                    is decoded with the map that actually produced it.
         boardId   - board id forwarded to every device read.
     """
 
-    def __init__(self, dora, map_path, boardId=0):
+    def __init__(self, dora, map_path, boardId=0, map_dir=None):
         self.dora = dora
         self.boardId = boardId
-        with open(map_path, 'r', encoding='utf-8') as f:
-            self.map = json.load(f)
-        self.index = build_index(self.map)
+        self.maps, self.default_id = load_map_set(map_path, map_dir)
 
     # --- device reads -> bytes --------------------------------------------
 
@@ -460,13 +564,8 @@ class Log:
         for note in notes:
             print(note)
 
-        decoded_lines = []
-        for header, params in frames:
-            line = format_frame(header, params, self.index)
-            if raw:
-                line += ("    | 0x%08X " % header) + \
-                        ' '.join('0x%08X' % p for p in params[:header & 0xF])
-            decoded_lines.append(line)
+        decoded_lines = render_frames(frames, self.maps, self.default_id, raw)
+        for line in decoded_lines:
             print(line)
         print("# decoded %d log entries" % len(frames))
 
