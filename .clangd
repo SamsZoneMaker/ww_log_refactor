@@ -2,27 +2,23 @@
 CompileFlags:
   Add:
     - -I.
-    - -Iinclude
-    - -Isim
-    - -Isrc
-    - -Isrc/app
-    - -Isrc/brom
-    - -Isrc/demo
-    - -Isrc/drivers
-    - -Isrc/test
-    - -DWW_LOG_STATIC_MODULE_DEMO_EN=0
-    - -DCURRENT_MODULE_STATIC_EN=$(STATIC_EN_VAL)
-    - -DDEBUG=1
-    - -D__NOTDIR_FILE__=\"$(notdir
-    - -DCURRENT_FILE_ID=$(FILE_ID_VAL)
-    - -DWW_LOG_STATIC_MODULE_DEMO_EN=0\""
-    - -DCURRENT_MODULE_STATIC_EN=0
-    - -DWW_LOG_STATIC_MODULE_TEST_EN=0\""
-    - -DCURRENT_MODULE_ID=$(MODULE_ID_VAL)
+    - -Imigration/include
+    - -Imigration/porting
+    - -Iww_log_v0/include
+    - -Iww_log_v0/sim
+    - -Iww_log_v0/src/app
+    - -Iww_log_v0/src/brom
+    - -Iww_log_v0/src/demo
+    - -Iww_log_v0/src/drivers
+    - -Iww_log_v0/src/test
+    - -Iww_log_v1/include
+    - -Iww_log_v1/output
+    - -Iww_log_v1/sim
+    - -Iww_log_v1/src/demo
+    - -Iww_log_v1/src/drivers
+    - -Iww_log_v1/src/test
+    - -Iww_log_v2/include/log
     - -D_GNU_SOURCE
-    - -DWW_LOG_STATIC_MODULE_DEMO_EN=0"
-    - -DWW_LOG_STATIC_MODULE_TEST_EN=0"
-    - -DWW_LOG_ENCODE_RAM_BUFFER_EN
   Remove:
     - -W*
     - -std=*

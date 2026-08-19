@@ -19,8 +19,94 @@
 #include "ww_log_store.h"
 #endif
 #ifdef SIMULATION_MODE
-#include "ww_log_panic.h"   /* ww_log_ram_dump_file / ww_log_storage_dump_file */
-#endif
+/* ---- Host-side dump helpers (sim only) -------------------------------------
+ * On real hardware the same bytes are pulled via JTAG; here we read the
+ * simulated DLM region / storage partition out to files so the
+ * encode -> dump -> decode loop (log_decoder.py) can be verified end-to-end.
+ * Relocated here from ww_log_panic.c after panic mode was removed. */
+#if (WW_LOG_BACKEND_RAM == 1) || (WW_LOG_BACKEND_STORAGE == 1)
+
+typedef enum {
+    WW_LOG_DUMP_BIN = 0,   /* raw binary snapshot */
+    WW_LOG_DUMP_HEX = 1    /* hex text frames ("0x.. 0x..") */
+} WW_LOG_DUMP_FMT_E;
+
+static void write_entries_hex(FILE *fp, const U8 *buf, U32 size)
+{
+    U32 i = 0;
+    while (i + 4 <= size) {
+        U32 hdr  = *(const U32 *)(buf + i);
+        U8  pcnt = (U8)(hdr & 0x3F);
+        U32 need = 4 + (U32)pcnt * 4;
+        U8  k;
+        if (hdr == 0xFFFFFFFF) break;
+        if (i + need > size) break;
+        fprintf(fp, "0x%08X", hdr);
+        for (k = 0; k < pcnt; k++)
+            fprintf(fp, " 0x%08X", *(const U32 *)(buf + i + 4 + (U32)k * 4));
+        fprintf(fp, "\n");
+        i += need;
+    }
+}
+
+#if (WW_LOG_BACKEND_RAM == 1)
+static int ww_log_ram_dump_file(const char *path, WW_LOG_DUMP_FMT_E fmt)
+{
+    FILE *fp;
+    if (path == NULL) return -1;
+
+    fp = fopen(path, (fmt == WW_LOG_DUMP_BIN) ? "wb" : "w");
+    if (fp == NULL) return -1;
+
+    if (fmt == WW_LOG_DUMP_BIN) {
+        fwrite((const void *)DLM_MAINTAIN_LOG_BASE_ADDR, 1,
+               DLM_MAINTAIN_LOG_SIZE, fp);
+    } else {
+        static U8 tmp[LOG_RAM_DATA_SIZE];
+        U16 n = 0;
+        log_ram_read(tmp, sizeof(tmp), &n);
+        write_entries_hex(fp, tmp, n);
+    }
+
+    fclose(fp);
+    return 0;
+}
+#endif /* WW_LOG_BACKEND_RAM */
+
+#if (WW_LOG_BACKEND_STORAGE == 1)
+static int ww_log_storage_dump_file(const char *path, WW_LOG_DUMP_FMT_E fmt)
+{
+    static U8 buf[LOG_STORAGE_PARTITION_SIZE];
+    U32 part_off, part_size;
+    FILE *fp;
+
+    if (path == NULL) return -1;
+    if (log_storage_get_partition_info(&part_off, &part_size) != 0) return -1;
+    if (part_size > sizeof(buf)) part_size = sizeof(buf);
+    if (log_storage_read(0, buf, part_size) != 0) return -1;
+
+    fp = fopen(path, (fmt == WW_LOG_DUMP_BIN) ? "wb" : "w");
+    if (fp == NULL) return -1;
+
+    if (fmt == WW_LOG_DUMP_BIN) {
+        fwrite(buf, 1, part_size, fp);
+    } else {
+        U32 off = 0;
+        while (off + sizeof(LOG_BLOCK_HEADER_T) <= part_size) {
+            LOG_BLOCK_HEADER_T *h = (LOG_BLOCK_HEADER_T *)(buf + off);
+            if (!log_header_validate(h)) break;
+            write_entries_hex(fp, buf + off + sizeof(*h), h->data_size);
+            off += sizeof(*h) + h->data_size;
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}
+#endif /* WW_LOG_BACKEND_STORAGE */
+
+#endif /* RAM || STORAGE */
+#endif /* SIMULATION_MODE */
 
 /* DEMO module */
 extern void demo_init(void);
@@ -83,16 +169,6 @@ int main(void)
     printf("-- only ERR lines should appear below --\n");
     demo_process(-1);   /* hits LOG_ERR + early return */
     drv_uart_send(512); /* WRN/INF/DBG suppressed, none are ERR */
-    ww_log_set_level_threshold(WW_LOG_LEVEL_DBG);
-
-    /* ===== panic mode: bypass filters + force-flush surviving logs ===== */
-    banner("Panic mode (crash handler)");
-    printf("-- threshold still ERR, but panic bypasses all filtering --\n");
-    ww_log_set_level_threshold(WW_LOG_LEVEL_ERR);
-    ww_log_disable_module(1);   /* DEMO off: would normally drop these */
-    ww_log_panic();             /* HardFault/watchdog would call this */
-    demo_process(7);            /* INF/DBG now emitted despite filters */
-    ww_log_enable_module(1);
     ww_log_set_level_threshold(WW_LOG_LEVEL_DBG);
 
 #if (WW_LOG_BACKEND_RAM == 1)

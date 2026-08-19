@@ -58,12 +58,4 @@
  */
 void ww_log_init(void);
 
-/**
- * @brief Enter panic mode: force-preserve logs on a crash (see ww_log_panic.h).
- *
- * Call from HardFault / watchdog handlers. Bypasses filtering, flushes RAM to
- * external storage synchronously, and makes subsequent logs write through.
- */
-void ww_log_panic(void);
-
 #endif /* WW_LOG_H */

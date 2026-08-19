@@ -17,6 +17,9 @@ sim_data/
 encode_output.txt
 *.log
 
+# Archives
+*.7z
+
 # Python
 __pycache__/
 *.pyc

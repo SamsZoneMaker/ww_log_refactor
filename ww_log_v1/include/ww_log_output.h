@@ -21,9 +21,8 @@
  * @param encoded     32-bit entry header (see WW_LOG_ENCODE)
  * @param params      array of param_count U32 values (may be NULL if 0)
  * @param param_count number of parameters
- * @param sync        1 = bypass buffering / flush immediately (panic path)
  */
-void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count, U8 sync);
+void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count);
 
 /* ========== Per-file injected macros (defaults if not injected by build) ========== */
 
@@ -60,7 +59,7 @@ void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count, U8 sync
 #define WW_LOG_LINE_OF(encoded)    (((encoded) >> 6)  & 0x3FFF)
 #define WW_LOG_PCNT_OF(encoded)    ((encoded) & 0x3F)
 
-#define WW_LOG_MODULE_OF(file_id)  (((file_id) >> 7) & 0x1F)
+#define N_WW_LOG_MODULE_OF(file_id)  (((file_id) >> 7) & 0x1F)
 #define WW_LOG_OFFSET_OF(file_id)  ((file_id) & 0x7F)
 
 void ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...);

@@ -5,7 +5,6 @@
 
 #include "ww_log.h"
 #include "ww_log_output.h"
-#include "ww_log_panic.h"
 #include "ww_log_config.h"
 #include <stdio.h>
 #include <stdarg.h>
@@ -27,13 +26,10 @@ void ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...)
     U32 params[WW_LOG_ENCODE_MAX_PARAMS];
     va_list args;
     U8 i;
-    U8 module_id = (U8)WW_LOG_MODULE_OF(file_id);
+    U8 module_id = (U8)N_WW_LOG_MODULE_OF(file_id);
 
-    /* Panic mode bypasses all filtering (CLAUDE.md §6.1). */
-    if (!g_ww_log_panic_flag) {
-        if ((g_ww_log_module_mask & (1U << module_id)) == 0) return;
-        if (level > g_ww_log_level_threshold) return;
-    }
+    if ((g_ww_log_module_mask & (1U << module_id)) == 0) return;
+    if (level > g_ww_log_level_threshold) return;
 
     if (param_count > WW_LOG_ENCODE_MAX_PARAMS)
         param_count = WW_LOG_ENCODE_MAX_PARAMS;
@@ -48,7 +44,7 @@ void ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...)
     /* level is intentionally NOT encoded (see CLAUDE.md §2) */
     encoded = WW_LOG_ENCODE(file_id, line, param_count);
 
-    ww_log_backend_emit(encoded, params, param_count, g_ww_log_panic_flag);
+    ww_log_backend_emit(encoded, params, param_count);
 }
 
 #endif /* WW_LOG_MODE_ENCODE */
@@ -70,11 +66,8 @@ void ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
 {
     va_list args;
 
-    /* Panic mode bypasses all filtering (CLAUDE.md §6.1). */
-    if (!g_ww_log_panic_flag) {
-        if ((g_ww_log_module_mask & (1U << module_id)) == 0) return;
-        if (level > g_ww_log_level_threshold) return;
-    }
+    if ((g_ww_log_module_mask & (1U << module_id)) == 0) return;
+    if (level > g_ww_log_level_threshold) return;
 
     if (level > WW_LOG_LEVEL_DBG)
         level = WW_LOG_LEVEL_DBG;
@@ -108,33 +101,31 @@ static void backend_uart_emit(U32 encoded, const U32 *params, U8 param_count)
 #endif
 
 #if (WW_LOG_BACKEND_RAM == 1)
-static void backend_ram_emit(U32 encoded, const U32 *params, U8 param_count, U8 sync)
+static void backend_ram_emit(U32 encoded, const U32 *params, U8 param_count)
 {
     int ret = log_ram_write(encoded, (U32 *)params, param_count);
 
 #if (WW_LOG_BACKEND_STORAGE == 1)
-    if (ret == 1 || sync) {
-        if (log_flush_request(sync) == 0)
+    if (ret == 1) {
+        if (log_flush_request(0) == 0)
             log_flush_process();
     }
 #else
     (void)ret;
-    (void)sync;
 #endif
 }
 #endif
 
-void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count, U8 sync)
+void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count)
 {
 #if (WW_LOG_BACKEND_UART == 1)
     backend_uart_emit(encoded, params, param_count);
 #endif
 #if (WW_LOG_BACKEND_RAM == 1)
-    backend_ram_emit(encoded, params, param_count, sync);
+    backend_ram_emit(encoded, params, param_count);
 #endif
 
 #if (WW_LOG_BACKEND_UART == 0) && (WW_LOG_BACKEND_RAM == 0)
     (void)encoded; (void)params; (void)param_count;
 #endif
-    (void)sync;
 }

@@ -11,20 +11,19 @@
 SHELL := /bin/sh
 .DEFAULT_GOAL := all
 
-CC = gcc
-PY = python3
+CC  = gcc
+PY  = python3
 
-BUILD_DIR = build
-BIN_DIR   = bin
-TARGET    = $(BIN_DIR)/ww_log_sim
+OUT_DIR = output
+TARGET  = $(OUT_DIR)/ww_log_sim
 
-LOG_CONFIG  = log_config.json
+LOG_CONFIG  = scripts/log/log_config.json
 WW_LOG_MAP  = ww_log_map.json
-FILE_IDS_MK = $(BUILD_DIR)/file_ids.mk
-AUTO_HEADER = include/auto_file_ids.h
-GEN         = tools/gen_log_map.py
+FILE_IDS_MK = $(OUT_DIR)/file_ids.mk
+AUTO_HEADER = $(OUT_DIR)/auto_file_ids.h
+GEN         = scripts/log/gen_log_map.py
 
-INCLUDES = -Iinclude -Isim -Isrc/demo -Isrc/drivers -Isrc/test
+INCLUDES = -Iinclude -I$(OUT_DIR) -Isim -Isrc/demo -Isrc/drivers -Isrc/test
 BASE_CFLAGS = -Wall -Wextra $(INCLUDES) -g -O2 \
               -Wno-unused-variable -Wno-unused-function \
               -D__USE_MINGW_ANSI_STDIO=0
@@ -41,26 +40,26 @@ ALL_SRCS = $(wildcard core/*.c) \
            $(LOG_SRCS) \
            examples/main.c
 
-OBJS = $(ALL_SRCS:%.c=$(BUILD_DIR)/%.o)
+OBJS = $(ALL_SRCS:%.c=$(OUT_DIR)/%.o)
 
 # ---- map + derived artifacts -------------------------------------------------
 # file_ids.mk is a real (-included) target so GNU make builds it during its
 # "remake makefiles" phase, before compiling anything.
 $(FILE_IDS_MK): $(LOG_CONFIG) $(GEN) $(LOG_SRCS)
-	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(OUT_DIR)
 	@echo "[GEN ] $(WW_LOG_MAP)"
-	@$(PY) $(GEN) $(LOG_CONFIG) --out $(WW_LOG_MAP)
-	@$(PY) $(GEN) $(LOG_CONFIG) --makefile > $(FILE_IDS_MK)
-	@$(PY) $(GEN) $(LOG_CONFIG) --header   > $(AUTO_HEADER)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header   > $(AUTO_HEADER)
 
 -include $(FILE_IDS_MK)
 
 .PHONY: map
 map: $(LOG_CONFIG) $(GEN)
-	@mkdir -p $(BUILD_DIR)
-	@$(PY) $(GEN) $(LOG_CONFIG) --out $(WW_LOG_MAP)
-	@$(PY) $(GEN) $(LOG_CONFIG) --makefile > $(FILE_IDS_MK)
-	@$(PY) $(GEN) $(LOG_CONFIG) --header   > $(AUTO_HEADER)
+	@mkdir -p $(OUT_DIR)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header   > $(AUTO_HEADER)
 	@echo "Map regenerated."
 
 # ---- build -------------------------------------------------------------------
@@ -69,12 +68,12 @@ all: $(TARGET)
 	@echo "Build complete: $(TARGET)  (mode set in include/ww_log.h)"
 
 $(TARGET): $(OBJS)
-	@mkdir -p $(BIN_DIR)
+	@mkdir -p $(OUT_DIR)
 	@echo "[LINK] $@"
 	@$(CC) $(OBJS) -o $@ $(LDFLAGS)
 
 # Per-file compile with file_id / module_id / static-enable injection.
-$(BUILD_DIR)/%.o: %.c $(FILE_IDS_MK)
+$(OUT_DIR)/%.o: %.c $(FILE_IDS_MK)
 	@mkdir -p $(dir $@)
 	@echo "[CC  ] $<"
 	$(eval V := $(subst /,_,$(subst .,_,$<)))
@@ -106,8 +105,7 @@ run: all
 
 .PHONY: clean
 clean:
-	@rm -rf $(BUILD_DIR) $(BIN_DIR)
-	@rm -f $(AUTO_HEADER)
+	@rm -rf $(OUT_DIR)
 	@echo "Clean complete."
 
 .PHONY: distclean
