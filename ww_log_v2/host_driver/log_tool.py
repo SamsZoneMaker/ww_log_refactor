@@ -9,24 +9,41 @@ channel, then decodes with ww_log_map.json.
 
 Sources (where the encoded logs physically live):
     ram      4KB power-loss-retained DLM "maintain" region ('WLOG' header),
-             read by memory address over JTAG SBA.
-    flash    LOG partition in SPI NOR flash ('LOGH' blocks).
-    eeprom   LOG partition in I2C EEPROM   ('LOGH' blocks).
+             read by memory address over JTAG (default addr 0xA021BD00).
+    flash    4KB LOG partition in SPI NOR flash ('XLOG' append log).
+    eeprom   21KB LOG partition in I2C EEPROM   ('XLOG' append log).
 
-The decoder auto-scans the read blob for the WLOG/LOGH magic, so an approximate
-offset (or a whole-region read) still works.
+The decoder auto-scans the read blob for the WLOG/XLOG magic, so an approximate
+offset (or a whole-region read) still works. An unwritten region reads back all
+0x00 (RAM) / all 0xFF (flash/eeprom); those are reported and not decoded, but
+--hex still dumps their raw bytes.
+
+Default behaviour: read the whole LOG region -> decode -> print. Extra switches:
+    --hex    print the raw encoded words (4 U32/line), skip decode entirely.
+    --save   also write the output to <YYYYmmdd_HHMMSS>.log in the cwd.
 
 Usage:
-    python log_tool.py ram    --map ww_log_map.json --addr 0x00100000
-    python log_tool.py flash  --map ww_log_map.json --offset 0x3F000
-    python log_tool.py eeprom --map ww_log_map.json --offset 0x1000 --dev-addr 0x57
-    python log_tool.py ram    --map ww_log_map.json --addr 0x00100000 -o dump.bin --raw
+    python log_tool.py ram    --map ww_log_map.json
+    python log_tool.py ram    --map ww_log_map.json --addr 0xA021BD00 --save
+    python log_tool.py flash  --map ww_log_map.json --hex
+    python log_tool.py eeprom --map ww_log_map.json --dev-addr 0x57
+    python log_tool.py ram    --map ww_log_map.json -o dump.bin --raw
 """
 
 import argparse
 import os
 import sys
+import time
 import traceback
+
+RAM_DEFAULT_ADDR = 0xA021BD00       # DLM maintain region (__dlm_log_start)
+RAM_LEN_DEFAULT    = '0x1000'       # 4KB
+FLASH_LEN_DEFAULT  = '0x1000'       # 4KB
+EEPROM_LEN_DEFAULT = '0x5400'       # 21KB
+
+# LOG partition base offsets on each external medium.
+FLASH_LOG_OFFSET   = '0x1F000'      # flash  LOG partition base
+EEPROM_LOG_OFFSET  = '0x1AA00'      # eeprom LOG partition base
 
 
 def _bootstrap_dora_root():
@@ -62,13 +79,23 @@ def parse_dev_addr(s):
 # Subcommands
 # ---------------------------------------------------------------------------
 
+def _resolve_output(args):
+    """Explicit -o wins; otherwise --save auto-names <timestamp>.log; else None."""
+    if args.output:
+        return args.output
+    if args.save:
+        return time.strftime('%Y%m%d_%H%M%S') + '.log'
+    return None
+
+
 def cmd_ram(args, dora):
     dora.f_log_decode_ram(
         args.map,
         parse_int(args.addr),
         v_length=parse_int(args.length),
         v_raw=args.raw,
-        v_output=args.output,
+        v_output=_resolve_output(args),
+        v_hex=args.hexdump,
         v_boardId=args.board)
 
 
@@ -78,7 +105,8 @@ def cmd_flash(args, dora):
         v_offset=parse_int(args.offset),
         v_length=parse_int(args.length),
         v_raw=args.raw,
-        v_output=args.output,
+        v_output=_resolve_output(args),
+        v_hex=args.hexdump,
         v_boardId=args.board)
 
 
@@ -88,7 +116,8 @@ def cmd_eeprom(args, dora):
         v_offset=parse_int(args.offset),
         v_length=parse_int(args.length),
         v_raw=args.raw,
-        v_output=args.output,
+        v_output=_resolve_output(args),
+        v_hex=args.hexdump,
         v_boardId=args.board,
         v_devAddr=args.dev_addr)
 
@@ -97,16 +126,22 @@ def cmd_eeprom(args, dora):
 # Argument parser
 # ---------------------------------------------------------------------------
 
-def _add_common(p):
+def _add_common(p, default_len):
     p.add_argument('--map', required=True, help='Path to ww_log_map.json')
-    p.add_argument('--length', default='0x1000',
-                   help='Bytes to read (default: 0x1000 = one 4KB region)')
+    p.add_argument('--length', default=default_len,
+                   help='Bytes to read (default: %s = the whole LOG region)'
+                        % default_len)
     p.add_argument('--raw', action='store_true',
                    help='Append the raw frame after each decoded line')
+    p.add_argument('--hex', dest='hexdump', action='store_true',
+                   help='Dump raw encoded words (4 U32/line), skip decode '
+                        '(works on empty 0x00/0xFF regions too)')
+    p.add_argument('--save', action='store_true',
+                   help='Also save the output to <YYYYmmdd_HHMMSS>.log')
     p.add_argument('-o', '--output', default=None,
                    help='Save to a file; extension decides what is written: '
                         '.dump/.bin -> raw log bytes (no decode), '
-                        '.txt/other -> decoded lines (default .txt)')
+                        '.txt/.log/other -> printed text (overrides --save)')
 
 
 def build_parser():
@@ -114,10 +149,11 @@ def build_parser():
         prog='log_tool.pyc',
         description='ww_log v1 on-device log decoder via JTAG',
         epilog='Examples:\n'
-               '  %(prog)s ram    --map ww_log_map.json --addr 0x00100000\n'
-               '  %(prog)s flash  --map ww_log_map.json --offset 0x3F000\n'
-               '  %(prog)s eeprom --map ww_log_map.json --offset 0x1000 --dev-addr 0x57\n'
-               '  %(prog)s ram    --map ww_log_map.json --addr 0x00100000 -o dump.bin --raw\n',
+               '  %(prog)s ram    --map ww_log_map.json\n'
+               '  %(prog)s ram    --map ww_log_map.json --save\n'
+               '  %(prog)s flash  --map ww_log_map.json --hex\n'
+               '  %(prog)s eeprom --map ww_log_map.json --dev-addr 0x57\n'
+               '  %(prog)s ram    --map ww_log_map.json -o dump.bin --raw\n',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
@@ -130,27 +166,30 @@ def build_parser():
     # --- ram ---
     p_ram = sub.add_parser('ram',
                            help='Decode the DLM maintain region (JTAG mem read)')
-    p_ram.add_argument('--addr', required=True,
-                       help='RAM region memory address (value of __dlm_log_start)')
-    _add_common(p_ram)
+    p_ram.add_argument('--addr', default='0x%08X' % RAM_DEFAULT_ADDR,
+                       help='RAM region memory address (value of '
+                            '__dlm_log_start; default 0x%08X)' % RAM_DEFAULT_ADDR)
+    _add_common(p_ram, RAM_LEN_DEFAULT)
 
     # --- flash ---
     p_flash = sub.add_parser('flash',
                              help='Decode the LOG partition from SPI NOR flash')
-    p_flash.add_argument('--offset', default='0x0',
-                         help='Flash offset of the LOG partition (default: 0x0)')
-    _add_common(p_flash)
+    p_flash.add_argument('--offset', default=FLASH_LOG_OFFSET,
+                         help='Flash offset of the LOG partition (default: %s)'
+                              % FLASH_LOG_OFFSET)
+    _add_common(p_flash, FLASH_LEN_DEFAULT)
 
     # --- eeprom ---
     p_eeprom = sub.add_parser('eeprom',
                               help='Decode the LOG partition from I2C EEPROM')
-    p_eeprom.add_argument('--offset', default='0x0',
-                          help='EEPROM offset of the LOG partition (default: 0x0)')
+    p_eeprom.add_argument('--offset', default=EEPROM_LOG_OFFSET,
+                          help='EEPROM offset of the LOG partition (default: %s)'
+                               % EEPROM_LOG_OFFSET)
     p_eeprom.add_argument('--dev-addr', type=parse_dev_addr, default=None,
                           metavar='HEX',
                           help='EEPROM I2C 7-bit address (0x50-0x57); '
                                'auto-scan if omitted')
-    _add_common(p_eeprom)
+    _add_common(p_eeprom, EEPROM_LEN_DEFAULT)
 
     return parser
 

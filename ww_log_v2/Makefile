@@ -53,7 +53,7 @@ LDFLAGS =
 # EXT_MEM backend is on) file-backed flash/eeprom + partition table.
 LOG_MODULE_SRCS = \
     log/n_ww_log_control.c \
-    log/n_ww_logoutput.c \
+    log/n_ww_log_output.c \
     log/n_ww_log_ram.c \
     log/n_ww_log_storage.c \
     log/n_ww_log_task.c

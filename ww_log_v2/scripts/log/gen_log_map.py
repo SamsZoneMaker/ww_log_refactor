@@ -23,7 +23,7 @@ Options:
                   relative file paths in the map (defaults to CWD).
 
 The --makefile / --header modes DERIVE from an existing ww_log_map.json
-(generate it first).  Encoding tag: file12_line14_pcnt6.
+(generate it first).  Encoding tag: file12_line14_lvl2_pcnt4.
 """
 
 import json
@@ -32,7 +32,7 @@ import re
 import sys
 from datetime import datetime, timezone
 
-ENCODING_TAG = "file12_line14_pcnt6"
+ENCODING_TAG = "file12_line14_lvl2_pcnt4"
 LEVELS = ("ERR", "WRN", "INF", "DBG")
 LOG_CALL_RE = re.compile(r'\bN?_?LOG_(ERR|WRN|INF|DBG)\s*\(')
 

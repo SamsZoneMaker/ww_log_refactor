@@ -297,6 +297,30 @@ class Eeprom:
             if not self._compare_verify(readback, v_data):
                 raise RuntimeError(f"Write verify mismatch at 0x{v_offset:06X}")
 
+    def f_clean(self, v_offset, v_length, v_fill=0xFF, v_verify=False):
+        """Clean an EEPROM region by overwriting it with a fill byte.
+
+        EEPROM has no native erase (it is byte-writable), so 'clean' just writes
+        `v_fill` (default 0xFF, matching the flash erased state so the log
+        decoder treats the region as empty) across [v_offset, v_offset+v_length).
+        """
+        self._resolve_dev_addr()
+        fill = bytes([v_fill & 0xFF]) * v_length
+        print(f"\nCleaning {self.dora.f_size_format(v_length)} at 0x{v_offset:06X} "
+              f"(fill 0x{v_fill & 0xFF:02X}) ...")
+        t0 = time.time()
+        self._write_with_progress(v_offset, fill, prefix="Clean")
+        elapsed = time.time() - t0
+        speed = v_length / elapsed if elapsed > 0 else 0
+        print(f"Clean complete in {elapsed:.1f}s ({self.dora.f_size_format(int(speed))}/s)")
+
+        if v_verify:
+            print(f"Verifying clean of {self.dora.f_size_format(v_length)} "
+                  f"at 0x{v_offset:06X} ...")
+            readback = self._read_with_progress(v_offset, v_length, prefix="Verify")
+            if not self._compare_verify(readback, fill):
+                raise RuntimeError(f"Clean verify mismatch at 0x{v_offset:06X}")
+
     def f_burn(self, v_binFile, v_offset=0x0, v_verify=False):
         with open(v_binFile, 'rb') as f:
             v_data = f.read()

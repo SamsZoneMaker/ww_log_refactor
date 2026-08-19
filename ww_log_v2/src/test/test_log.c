@@ -38,7 +38,8 @@ static void section(const char *title)
 
 /* Write one synthetic encoded entry with `pcnt` U32 params straight into the
  * RAM ring (bypasses the N_LOG_* macros for deterministic sizing). */
-static void t_write(U8 pcnt)
+/* Write one entry at an explicit level (so ext level-filter paths are testable). */
+static void t_write_lvl(U8 level, U8 pcnt)
 {
     U32 p[N_WW_LOG_ENCODE_MAX_PARAMS];
     U8  i;
@@ -46,7 +47,13 @@ static void t_write(U8 pcnt)
     {
         p[i] = 0xA0000000u + i;
     }
-    (void)log_ram_write(N_WW_LOG_ENCODE(CURRENT_FILE_ID, 123, pcnt), p, pcnt);
+    (void)log_ram_write(N_WW_LOG_ENCODE(CURRENT_FILE_ID, 123, level, pcnt), p, pcnt);
+}
+
+/* Default helper: ERR level -> always passes the ext persist threshold. */
+static void t_write(U8 pcnt)
+{
+    t_write_lvl(N_WW_LOG_LEVEL_ERR, pcnt);
 }
 
 /* ====================================================================== */
@@ -105,9 +112,9 @@ static void test_ram_corruption(void)
     log_ram_init(WW_TRUE);
     t_write(1); t_write(1); t_write(1);
     CHECK(log_ram_validate_data() == WW_OK, "valid before corruption");
-    /* Smash the first entry header to claim 63 params -> overruns the data. */
+    /* Smash the first entry header to claim the max params -> overruns the data. */
     U8 *d = log_ram_get_data_ptr();
-    *(U32 *)d = N_WW_LOG_ENCODE(CURRENT_FILE_ID, 1, 63);
+    *(U32 *)d = N_WW_LOG_ENCODE(CURRENT_FILE_ID, 1, N_WW_LOG_LEVEL_ERR, 15);
     CHECK(log_ram_validate_data() != WW_OK, "corruption detected (pcnt overrun)");
     log_ram_init(WW_TRUE);  /* cleanup */
 }
@@ -142,7 +149,7 @@ static void test_cold_fallback(void)
 
 static void test_level_filter(void)
 {
-    section("Storage level filter (DBG not persisted) + ERR flag");
+    section("RAM keeps all levels + ERR flag");
     log_ram_init(WW_TRUE);
     n_ww_log_set_level_threshold(N_WW_LOG_LEVEL_DBG);   /* allow all at runtime */
     U32 before = log_ram_get_log_count();
@@ -150,8 +157,8 @@ static void test_level_filter(void)
     N_LOG_WRN("selftest wrn %d", 2);
     N_LOG_INF("selftest inf %d", 3);
     N_LOG_DBG("selftest dbg %d", 4);
-    CHECK(log_ram_get_log_count() - before == 3,
-          "ERR/WRN/INF persisted, DBG dropped (storage threshold INF)");
+    CHECK(log_ram_get_log_count() - before == 4,
+          "RAM keeps every level (ext level-filter happens at flush)");
     CHECK((log_ram_get_flags() & LOG_FLAG_ERROR) != 0, "ERR sets LOG_FLAG_ERROR");
 }
 
@@ -192,7 +199,7 @@ static void test_level_threshold(void)
 
 static void test_ext_flush(void)
 {
-    section("External storage: block flush + payload CRC");
+    section("External storage: append flush + partition header");
     if (log_ext_mem_available() != WW_TRUE)
     {
         CHECK(0, "external storage available");
@@ -201,69 +208,12 @@ static void test_ext_flush(void)
     log_ext_mem_clear();
     log_ram_init(WW_TRUE);
 
-    U32 i;
-    for (i = 0; i < 40; i++)        /* 40 * 8B = 320B -> fits one block payload */
-    {
-        t_write(1);
-    }
-    U16 slot0 = log_ext_get_write_slot();
-    int r = log_ram_flush();
-    CHECK(r == LOG_EXT_OK, "flush returns OK");
-    CHECK(log_ext_get_write_slot() == (U16)(slot0 + 1), "write_slot advanced by 1");
-
-    static U8 buf[LOG_EXT_BLOCK_SIZE];
-    log_ext_mem_read(buf, LOG_EXT_BLOCK_SIZE);
-    LOG_BLOCK_HEADER_T *bh = (LOG_BLOCK_HEADER_T *)buf;
-    CHECK(bh->magic == LOG_BLOCK_MAGIC, "block 0 has 'LOGH' magic");
-    CHECK(bh->entry_count == 40,        "block records 40 entries");
-    U32 crc = log_calc_checksum(buf + LOG_EXT_BLOCK_HEADER_SIZE, bh->data_size);
-    CHECK(crc == bh->crc,               "block payload CRC matches");
-}
-
-static void test_ext_ring_wrap(void)
-{
-    section("External storage: ring wrap (RING keeps most recent)");
-    if (log_ext_mem_available() != WW_TRUE)
-    {
-        CHECK(0, "external storage available");
-        return;
-    }
-    log_ext_mem_clear();
-    log_ram_init(WW_TRUE);
-    U16 bc = log_ext_get_block_count();
+    U32 base_off = log_ext_get_write_offset();
+    CHECK(base_off == log_ext_get_log_offset() + LOG_EXT_PART_HDR_SIZE,
+          "write_off starts just past the 8B partition header");
 
     U32 i;
-    for (i = 0; i < (U32)(bc + 3) * 45; i++)   /* > block_count blocks of traffic */
-    {
-        t_write(1);
-    }
-    int guard = 0;
-    while (log_ram_get_pending_len() > 0 && guard++ < 2000)
-    {
-        if (log_ram_flush() != LOG_EXT_OK)
-        {
-            break;
-        }
-    }
-    CHECK(log_ext_get_wrap_count() > 0, "ring wrapped (wrap_count > 0)");
-    CHECK(log_ext_get_block_count() == bc, "block_count stable");
-    CHECK(log_ext_get_write_slot() < bc, "write_slot within ring");
-}
-
-static void test_ext_resume(void)
-{
-    section("External storage: footer resume across reboot (no erase)");
-    if (log_ext_mem_available() != WW_TRUE)
-    {
-        CHECK(0, "external storage available");
-        return;
-    }
-    log_ext_mem_clear();
-    log_ram_init(WW_TRUE);
-
-    /* Flush a few blocks, then snapshot the ring cursor. */
-    U32 i;
-    for (i = 0; i < 80; i++)        /* 80 * 8B -> ~2 blocks */
+    for (i = 0; i < 20; i++)        /* 20 * 8B = 160B, all ERR -> all persisted */
     {
         t_write(1);
     }
@@ -272,30 +222,137 @@ static void test_ext_resume(void)
     {
         if (log_ram_flush() != LOG_EXT_OK) { break; }
     }
-    U16 slot = log_ext_get_write_slot();
-    U32 seq  = log_ext_get_next_seq();
-    U32 wrap = log_ext_get_wrap_count();
-    CHECK(seq > 0, "blocks flushed before reboot");
+    CHECK(log_ext_get_write_offset() == base_off + 20 * 8,
+          "write_off advanced by 20 entries * 8B");
+
+    /* Partition header 'XLOG' present at the base, first entry right after it. */
+    static U8 buf[64];
+    log_ext_mem_read(buf, sizeof(buf));
+    LOG_EXT_PART_HDR_T *ph = (LOG_EXT_PART_HDR_T *)buf;
+    CHECK(ph->magic == LOG_EXTMEM_MAGIC, "partition header has 'XLOG' magic");
+    U32 e0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE);
+    CHECK(N_WW_LOG_PCNT_OF(e0) == 1,             "first appended entry has pcnt=1");
+    CHECK(N_WW_LOG_LEVEL_OF(e0) == N_WW_LOG_LEVEL_ERR, "first entry keeps ERR level");
+}
+
+static void test_ext_level_filter(void)
+{
+    section("External storage: only ERR/WRN appended (INF/DBG filtered)");
+    if (log_ext_mem_available() != WW_TRUE)
+    {
+        CHECK(0, "external storage available");
+        return;
+    }
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+
+    U32 base_off = log_ext_get_write_offset();
+    /* 4 entries, 1 param each (8B): ERR + WRN persist, INF + DBG do not. */
+    t_write_lvl(N_WW_LOG_LEVEL_ERR, 1);
+    t_write_lvl(N_WW_LOG_LEVEL_INF, 1);
+    t_write_lvl(N_WW_LOG_LEVEL_WRN, 1);
+    t_write_lvl(N_WW_LOG_LEVEL_DBG, 1);
+    int guard = 0;
+    while (log_ram_get_pending_len() > 0 && guard++ < 2000)
+    {
+        if (log_ram_flush() != LOG_EXT_OK) { break; }
+    }
+    CHECK(log_ext_get_write_offset() == base_off + 2 * 8,
+          "only the 2 ERR/WRN entries were appended to ext");
+    CHECK(log_ram_get_pending_len() == 0,
+          "all 4 entries consumed from RAM (INF/DBG dropped, not stuck)");
+}
+
+static void test_ext_resume(void)
+{
+    section("External storage: cold-boot scan resume (no erase)");
+    if (log_ext_mem_available() != WW_TRUE)
+    {
+        CHECK(0, "external storage available");
+        return;
+    }
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+
+    /* Append a few entries, then snapshot the write cursor. */
+    U32 i;
+    for (i = 0; i < 30; i++)
+    {
+        t_write(1);
+    }
+    int guard = 0;
+    while (log_ram_get_pending_len() > 0 && guard++ < 2000)
+    {
+        if (log_ram_flush() != LOG_EXT_OK) { break; }
+    }
+    U32 woff = log_ext_get_write_offset();
+    CHECK(woff > log_ext_get_log_offset() + LOG_EXT_PART_HDR_SIZE,
+          "entries appended before reboot");
 
     /* Simulate a reboot: ext ctx (RAM) is lost, device bytes persist. */
     log_ext_force_reinit();
     CHECK(log_ext_get_initialized() == WW_FALSE, "ext ctx dropped (reboot sim)");
 
-    /* First access re-inits -> must RESUME from footer, not erase. */
+    /* First access re-inits -> must rebuild write_off by SCANNING, not erase. */
     CHECK(log_ext_mem_available() == WW_TRUE, "re-init succeeds after reboot");
-    CHECK(log_ext_get_write_slot() == slot,  "write_slot resumed from footer");
-    CHECK(log_ext_get_next_seq()  == seq,   "next_seq resumed from footer");
-    CHECK(log_ext_get_wrap_count() == wrap,  "wrap_count resumed from footer");
+    CHECK(log_ext_get_write_offset() == woff, "write_off rebuilt by cold-boot scan");
 
-    /* The previously flushed block 0 must still be intact (proves no erase). */
-    static U8 buf[LOG_EXT_BLOCK_SIZE];
-    log_ext_mem_read(buf, LOG_EXT_BLOCK_SIZE);
-    LOG_BLOCK_HEADER_T *bh = (LOG_BLOCK_HEADER_T *)buf;
-    CHECK(bh->magic == LOG_BLOCK_MAGIC, "prior block preserved (not erased)");
+    /* The partition header + first entry must still be intact (proves no erase). */
+    static U8 buf[64];
+    log_ext_mem_read(buf, sizeof(buf));
+    LOG_EXT_PART_HDR_T *ph = (LOG_EXT_PART_HDR_T *)buf;
+    CHECK(ph->magic == LOG_EXTMEM_MAGIC, "partition header preserved (not erased)");
 
     /* Cleanup so later runs start from a known-empty archive. */
     log_ext_mem_clear();
 }
+
+#if defined(CONFIG_N_LOG_EXT_FLUSH_MARKER)
+static void test_ext_flush_marker(void)
+{
+    section("External storage: flush marker (once per armed drain)");
+    if (log_ext_mem_available() != WW_TRUE)
+    {
+        CHECK(0, "external storage available");
+        return;
+    }
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+
+    U32 base_off = log_ext_get_write_offset();
+    log_ext_flush_marker_arm();          /* simulate one flush-task wake */
+    t_write(1);                          /* two ERR entries (8B each) -> persisted */
+    t_write(1);
+    int guard = 0;
+    while (log_ram_get_pending_len() > 0 && guard++ < 2000)
+    {
+        if (log_ram_flush() != LOG_EXT_OK) { break; }
+    }
+    CHECK(log_ext_get_write_offset()
+              == base_off + LOG_EXT_FLUSH_MARKER_SIZE + 2 * 8,
+          "write_off = marker(8B) + 2 entries(16B)");
+
+    static U8 buf[64];
+    log_ext_mem_read(buf, sizeof(buf));
+    U32 m0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE);
+    CHECK(m0 == LOG_EXT_FLUSH_MARKER_HDR, "first appended word is the flush marker");
+    U32 e0 = *(U32 *)(buf + LOG_EXT_PART_HDR_SIZE + LOG_EXT_FLUSH_MARKER_SIZE);
+    CHECK(N_WW_LOG_PCNT_OF(e0) == 1, "a real entry follows right after marker+tick");
+
+    /* A second drain that was NOT re-armed must not add another marker. */
+    U32 off2 = log_ext_get_write_offset();
+    t_write(1);
+    guard = 0;
+    while (log_ram_get_pending_len() > 0 && guard++ < 2000)
+    {
+        if (log_ram_flush() != LOG_EXT_OK) { break; }
+    }
+    CHECK(log_ext_get_write_offset() == off2 + 8,
+          "unarmed drain appends the entry only (no second marker)");
+
+    log_ext_mem_clear();
+}
+#endif /* CONFIG_N_LOG_EXT_FLUSH_MARKER */
 
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 
@@ -325,8 +382,11 @@ int test_log_run_all(void)
 #endif
 #if defined(CONFIG_N_LOG_BACKEND_EXT_MEM)
     test_ext_flush();
-    test_ext_ring_wrap();
+    test_ext_level_filter();
     test_ext_resume();
+#if defined(CONFIG_N_LOG_EXT_FLUSH_MARKER)
+    test_ext_flush_marker();
+#endif
 #endif
     /* leave the log in a clean state for whatever runs next */
     n_ww_log_set_level_threshold(N_WW_LOG_LEVEL_DBG);

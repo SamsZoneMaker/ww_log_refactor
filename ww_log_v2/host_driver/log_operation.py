@@ -10,27 +10,27 @@ Access chains (all via the same JTAG channel the flash/eeprom tools already use)
     RAM     PC -> JTAG -> RISC-V Debug Module -> System Bus -> memory read
             (the 4KB power-loss-retained DLM "maintain" region, 'WLOG' header)
 
-    Flash   PC -> JTAG -> ATCSPI200 -> SPI NOR  (LOG partition, 'LOGH' blocks)
+    Flash   PC -> JTAG -> ATCSPI200 -> SPI NOR  (LOG partition, 'XLOG' append log)
 
-    EEPROM  PC -> JTAG -> ATCIIC100 -> I2C EEPROM (LOG partition, 'LOGH' blocks)
+    EEPROM  PC -> JTAG -> ATCIIC100 -> I2C EEPROM (LOG partition, 'XLOG' append log)
 
-This module is SELF-CONTAINED: the encode format (CLAUDE.md S2) and the
-RAM/storage container layout (ww_log_config.h) are reproduced here, so the dora
-deployment has no dependency on the ww_log_v1/tools/ folder. Keep the constants
-below in sync with ww_log_config.h if the firmware geometry ever changes.
+This module is SELF-CONTAINED: the encode format and the RAM/storage container
+layout (n_ww_log_storage.h) are reproduced here, so the dora deployment has no
+dependency on the ww_log_v2/scripts/ folder. Keep the constants below in sync
+with the firmware headers if the geometry ever changes.
 
 Encoding, 32-bit header (little-endian on the wire):
 
-   31                20 19              6 5         0
-  +--------------------+------------------+-----------+
-  |   file_id (12)     |    line (14)     | param_cnt |
-  +--------------------+------------------+-----------+
+   31                20 19              6 5   4 3        0
+  +--------------------+------------------+-----+---------+
+  |   file_id (12)     |    line (14)     |lv(2)| pcnt(4) |
+  +--------------------+------------------+-----+---------+
           |
           +-- file_id = [ module_id : 5 ][ offset : 7 ]
 
-level is NOT encoded; it is restored from the map by (file_id, line).
-%s params cannot be restored (only the pointer was stored) -> shown as
-<%s@0xXXXXXXXX>.
+level IS encoded (2 bits) and read straight from the header; the map is only used
+for the file name + format string. %s params cannot be restored (only the pointer
+was stored) -> shown as <%s@0xXXXXXXXX>.
 """
 
 import json
@@ -51,10 +51,13 @@ FLASH_MMAP_BASE = 0x80000000
 LEVEL_NAMES = ("ERR", "WRN", "INF", "DBG")
 
 RAM_MAGIC      = 0x574C4F47          # 'WLOG' - LOG_RAM_HEADER_T at region start
-BLOCK_MAGIC    = 0x4C4F4748          # 'LOGH' - LOG_BLOCK_HEADER_T before each block
-FOOTER_MAGIC   = 0x474F4C46          # 'FLOG' - LOG_EXT_FOOTER_T ring control
+PART_MAGIC     = 0x474F4C58          # 'XLOG' - LOG_EXT_PART_HDR_T at partition base
+# Flush-batch marker header (n_ww_log_storage.h LOG_EXT_FLUSH_MARKER_HDR):
+# N_WW_LOG_ENCODE(file_id=0xFFF, line=0x3FFF, level=0, pcnt=1). Prepended to each
+# ext flush batch; its single U32 param is the FreeRTOS tick at flush time.
+FLUSH_MARKER   = 0xFFFFFFC1
 RAM_MAGIC_LE   = struct.pack('<I', RAM_MAGIC)
-BLOCK_MAGIC_LE = struct.pack('<I', BLOCK_MAGIC)
+PART_MAGIC_LE  = struct.pack('<I', PART_MAGIC)
 ERASED         = 0xFFFFFFFF
 
 # RAM maintain region geometry (n_ww_log_storage.h). v2 header is 32 bytes.
@@ -62,15 +65,23 @@ RAM_HEADER_SIZE   = 32
 RAM_TOTAL_SIZE    = 4096
 RAM_DATA_SIZE     = RAM_TOTAL_SIZE - RAM_HEADER_SIZE   # 4064
 
-# External-storage block ring geometry (n_ww_log_storage.h).
-EXT_BLOCK_SIZE    = 512
-BLOCK_HEADER_SIZE = 28
-EXT_FOOTER_SIZE   = 32
+# External-storage geometry (n_ww_log_storage.h): 8B 'XLOG' partition header then
+# an append-only stream of whole entries, terminated by the first 0xFFFFFFFF.
+EXT_PART_HDR_SIZE = 8
 
-# Default read window when the caller does not pass an explicit length: one
-# whole maintain region / LOG partition. Reading a superset is fine -- the
-# magic auto-scan locates the real container inside it.
-DEFAULT_READ_LEN = 4096
+# Default read window when the caller does not pass an explicit length: the
+# whole LOG region of each source. Reading a superset is fine -- the magic
+# auto-scan locates the real container inside it.
+RAM_LOG_SIZE     = 4096            # DLM maintain region
+FLASH_LOG_SIZE   = 4096            # flash LOG partition (4KB)
+EEPROM_LOG_SIZE  = 21 * 1024       # eeprom LOG partition (21KB)
+DEFAULT_READ_LEN = RAM_LOG_SIZE    # back-compat default
+
+# "Unwritten" fill byte per medium: RAM powers up / clears to 0x00, NOR flash
+# and EEPROM erase to 0xFF. A region that is entirely its fill byte holds no
+# logs, so decode is skipped (a --hex dump still shows the raw bytes).
+RAM_FILL_BYTE    = 0x00
+EXT_FILL_BYTE    = 0xFF
 
 # A printf conversion specifier: %[flags][width][.precision][length]conv
 SPEC_RE = re.compile(
@@ -88,8 +99,8 @@ SPEC_RE = re.compile(
 # ----------------------------------------------------------------------------
 
 def decode_header(h):
-    """Split a 32-bit header into (file_id, line, param_count)."""
-    return (h >> 20) & 0xFFF, (h >> 6) & 0x3FFF, h & 0x3F
+    """Split a 32-bit header into (file_id, line, level, param_count)."""
+    return (h >> 20) & 0xFFF, (h >> 6) & 0x3FFF, (h >> 4) & 0x3, h & 0xF
 
 
 def to_signed32(v):
@@ -177,20 +188,52 @@ def build_index(the_map):
 def format_frame(header, params, idx):
     """Turn one (header, params) frame into a readable line via the map index."""
     entries, files, _modules = idx
-    file_id, line, pcnt = decode_header(header)
+
+    if header == FLUSH_MARKER:                 # ext flush-batch boundary
+        tick = params[0] if params else 0
+        return ("----- flush @ tick=%u (0x%08X) -----" % (tick, tick))
+
+    file_id, line, level, pcnt = decode_header(header)
     params = params[:pcnt]
+    lvl = LEVEL_NAMES[level]   # level comes straight from the encoded header
 
     finfo = files.get(file_id)
     fname = _basename(finfo['path']) if finfo else 'file_id_%d' % file_id
 
     entry = entries.get((file_id, line))
     if entry is None:
-        return ("[???] %s:%d - <no map entry> [raw 0x%08X, %d params: %s]"
-                % (fname, line, header, pcnt,
+        return ("[%s] %s:%d - <no map entry> [raw 0x%08X, %d params: %s]"
+                % (lvl, fname, line, header, pcnt,
                    ' '.join('0x%08X' % p for p in params)))
 
-    return "[%s] %s:%d - %s" % (entry.get('level', '???'), fname, line,
+    return "[%s] %s:%d - %s" % (lvl, fname, line,
                                 render_fmt(entry.get('fmt', ''), params))
+
+
+# ----------------------------------------------------------------------------
+# raw hex dump (no decode) + empty-region detection
+# ----------------------------------------------------------------------------
+
+def is_all_fill(data, fill):
+    """True if `data` is non-empty and every byte equals `fill` (0x00 for an
+    unwritten RAM region, 0xFF for erased flash/eeprom) -> nothing to decode."""
+    return len(data) > 0 and data.count(fill) == len(data)
+
+
+def hex_dump_lines(data, base=0):
+    """Render `data` as offset-prefixed rows of 4 little-endian U32 words each
+    (a wider take on the firmware's log_ram_dump_hex, which prints 1 word/row).
+    A short tail is zero-padded to a full word so the columns stay aligned."""
+    lines = []
+    for off in range(0, len(data), 16):
+        chunk = data[off:off + 16]
+        words = []
+        for w in range(0, len(chunk), 4):
+            wb = chunk[w:w + 4]
+            wb = wb + b'\x00' * (4 - len(wb))       # pad a ragged tail word
+            words.append('%08X' % struct.unpack('<I', wb)[0])
+        lines.append('0x%04X | %s' % (base + off, ' '.join(words)))
+    return lines
 
 
 # ----------------------------------------------------------------------------
@@ -204,7 +247,7 @@ def parse_entry_stream(buf, start, end):
         header = struct.unpack_from('<I', buf, i)[0]
         if header == ERASED:
             break   # hit erased flash / padding
-        pcnt = header & 0x3F
+        pcnt = header & 0xF
         need = 4 + pcnt * 4
         if i + need > end:
             break   # truncated tail
@@ -212,14 +255,6 @@ def parse_entry_stream(buf, start, end):
         frames.append((header, params))
         i += need
     return frames
-
-
-def _sum_u32(payload):
-    """Match the firmware log_calc_checksum: sum of whole little-endian U32s."""
-    s = 0
-    for i in range(0, len(payload) - 3, 4):
-        s = (s + struct.unpack_from('<I', payload, i)[0]) & 0xFFFFFFFF
-    return s
 
 
 def parse_ram_region(buf, off, notes):
@@ -241,56 +276,49 @@ def parse_ram_region(buf, off, notes):
     if len(data) < RAM_DATA_SIZE:                 # dump shorter than a full region
         data = data + b'\xff' * (RAM_DATA_SIZE - len(data))
 
-    if overflow:                                  # ring wrapped: read..end + 0..write
-        ordered = data[read_index:] + data[:write_index]
+    # Decode everything physically present in the ring, oldest-first. read_index
+    # is only the flush cursor (how far the ext backend has drained) -- the ring
+    # never erases flushed bytes, so bounding by read_index would hide logs that
+    # are still in RAM after a flush (read==write => "0 entries" even when full).
+    # Mirror the firmware's log_ram_dump_hex and key off write_index instead:
+    #   overflow -> ring wrapped & full: [write_index..end] + [0..write_index)
+    #   else     -> linear fill:         [0..write_index)
+    if overflow:
+        ordered = data[write_index:] + data[:write_index]
     else:
-        ordered = data[read_index:write_index]
+        ordered = data[:write_index]
+    if read_index != write_index or flush_count:
+        notes.append("# note: showing all %d bytes physically in the ring "
+                     "(incl. entries already flushed to ext)" % len(ordered))
     return parse_entry_stream(ordered, 0, len(ordered))
 
 
-def parse_block_ring(buf, notes):
-    """Parse the external-storage block ring: fixed 512B slots, each a
-    LOG_BLOCK_HEADER_T (28B 'LOGH' + payload). Slots are walked by stride,
-    validated by magic + payload CRC, then ordered by sequence number so a
-    wrapped ring (oldest slot overwritten) decodes in chronological order."""
-    n = len(buf)
-    slots = (n - EXT_FOOTER_SIZE) // EXT_BLOCK_SIZE if n > EXT_FOOTER_SIZE else n // EXT_BLOCK_SIZE
-    blocks = []
-    for i in range(max(slots, 0)):
-        off = i * EXT_BLOCK_SIZE
-        if off + BLOCK_HEADER_SIZE > n:
-            break
-        magic, seq, _ts, data_size, ecount, crc, _r1, _r2 = \
-            struct.unpack_from('<IIIHHIII', buf, off)
-        if magic != BLOCK_MAGIC:
-            continue                              # erased / never-written slot
-        payload = buf[off + BLOCK_HEADER_SIZE: off + BLOCK_HEADER_SIZE + data_size]
-        ok = (_sum_u32(payload) == crc)
-        notes.append("# slot %d: seq=%d size=%d entries=%d crc=%s"
-                     % (i, seq, data_size, ecount, "ok" if ok else "BAD"))
-        if ok:
-            blocks.append((seq, payload))
-    blocks.sort(key=lambda b: b[0])               # chronological by sequence
-    frames = []
-    for _seq, payload in blocks:
-        frames += parse_entry_stream(payload, 0, len(payload))
-    return frames
+def parse_ext_partition(buf, off, notes):
+    """Parse the external-storage append log: an 8B 'XLOG' partition header at
+    `off`, then a contiguous stream of whole entries up to the first 0xFFFFFFFF
+    (erased tail). No per-block header/CRC/footer -- the stream is self-describing
+    (each entry's pcnt gives its length) and already in chronological order."""
+    magic, version, _res = struct.unpack_from('<IHH', buf, off)
+    notes.append("# ext partition header 'XLOG' at 0x%X (version=%d)" % (off, version))
+    if magic != PART_MAGIC:
+        notes.append("# WARNING: partition magic mismatch (0x%08X) -> raw parse" % magic)
+    return parse_entry_stream(buf, off + EXT_PART_HDR_SIZE, len(buf))
 
 
 def parse_binary(data, notes):
     """Auto-frame a binary dump by locating the first known container magic."""
     iw = data.find(RAM_MAGIC_LE)
-    il = data.find(BLOCK_MAGIC_LE)
-    cands = [(i, k) for i, k in ((iw, 'ram'), (il, 'logh')) if i != -1]
+    ip = data.find(PART_MAGIC_LE)
+    cands = [(i, k) for i, k in ((iw, 'ram'), (ip, 'flog')) if i != -1]
     if not cands:
-        notes.append("# no WLOG/LOGH magic found -> parsing as raw entry stream")
+        notes.append("# no WLOG/XLOG magic found -> parsing as raw entry stream")
         return parse_entry_stream(data, 0, len(data))
     start, kind = min(cands)
     if kind == 'ram':
         notes.append("# found RAM 'WLOG' header at offset 0x%X" % start)
         return parse_ram_region(data, start, notes)
-    notes.append("# found storage 'LOGH' block ring (slot stride %dB)" % EXT_BLOCK_SIZE)
-    return parse_block_ring(data, notes)
+    notes.append("# found ext 'XLOG' append log at offset 0x%X" % start)
+    return parse_ext_partition(data, start, notes)
 
 
 def _save_output(path, raw_bytes, decoded_lines):
@@ -335,9 +363,12 @@ class Log:
     # --- device reads -> bytes --------------------------------------------
 
     def _read_ram(self, addr, length):
-        """Read `length` bytes of target memory at `addr` over JTAG SBA."""
-        _, byte_list = self.dora.f_csr_byte_rd(addr, length, v_boardId=self.boardId)
-        return bytes(byte_list)
+        """Read `length` bytes of the DLM maintain region at `addr` over JTAG,
+        using word (csr_word) reads. `addr` must be 4-byte aligned."""
+        words = (length + 3) // 4
+        _addrs, vals = self.dora.f_csr_word_rd(addr, words, v_boardId=self.boardId)
+        blob = b''.join(struct.pack('<I', v & 0xFFFFFFFF) for v in vals)
+        return blob[:length]
 
     def _read_flash(self, offset, length):
         """Fast flash read via the memory-mapped window (JTAG/SBA word reads),
@@ -354,14 +385,37 @@ class Log:
 
     # --- decode + emit -----------------------------------------------------
 
-    def _decode_blob(self, data, raw, output):
-        """Auto-frame `data`, print decoded lines, optionally save, return frames.
+    def _decode_blob(self, data, raw, output, fill, hex_only=False):
+        """Turn a raw device read into output, three ways:
 
-        `output` extension decides what is saved:
-          .dump/.bin -> the raw log bytes read off the device (no decode)
-          .txt/other -> the decoded human-readable lines
-        (no extension defaults to .txt / decoded)
+          hex_only=True  -> dump the raw bytes as 4 U32/line, never decode.
+          all `fill`     -> region is unwritten (0x00 RAM / 0xFF ext): report
+                            it and skip decode (use --hex to see raw bytes).
+          otherwise      -> auto-frame + decode to readable lines.
+
+        `output` (if set) receives whatever was produced; its extension decides
+        the format: .dump/.bin -> raw device bytes, .txt/.log/other -> the text.
+        Returns the decoded frames (empty for the hex/empty paths).
         """
+        # 1) raw hex dump: bytes as-is, no interpretation.
+        if hex_only:
+            lines = hex_dump_lines(data)
+            print("# raw hex dump: %d bytes, 4x U32 (LE) per line" % len(data))
+            for line in lines:
+                print(line)
+            if output:
+                _save_output(output, data, lines)
+            return []
+
+        # 2) empty-region guard: an all-fill blob holds no logs.
+        if is_all_fill(data, fill):
+            print("# region is entirely 0x%02X (unwritten) -> nothing to decode "
+                  "(use --hex to dump the raw bytes)" % fill)
+            if output:
+                _save_output(output, data, [])
+            return []
+
+        # 3) normal decode path.
         notes = []
         frames = parse_binary(data, notes)
         for note in notes:
@@ -372,7 +426,7 @@ class Log:
             line = format_frame(header, params, self.index)
             if raw:
                 line += ("    | 0x%08X " % header) + \
-                        ' '.join('0x%08X' % p for p in params[:header & 0x3F])
+                        ' '.join('0x%08X' % p for p in params[:header & 0xF])
             decoded_lines.append(line)
             print(line)
         print("# decoded %d log entries" % len(frames))
@@ -383,20 +437,23 @@ class Log:
 
     # --- public ------------------------------------------------------------
 
-    def f_decode_ram(self, addr, length=DEFAULT_READ_LEN, raw=False, output=None):
-        """Read + decode the RAM maintain region at memory address `addr`."""
+    def f_decode_ram(self, addr, length=RAM_LOG_SIZE, raw=False,
+                     output=None, hex_only=False):
+        """Read + decode (or hex-dump) the RAM maintain region at `addr`."""
         print(f"Reading {length} bytes from RAM 0x{addr:08X} ...")
         data = self._read_ram(addr, length)
-        return self._decode_blob(data, raw, output)
+        return self._decode_blob(data, raw, output, RAM_FILL_BYTE, hex_only)
 
-    def f_decode_flash(self, offset=0x0, length=DEFAULT_READ_LEN,
-                       raw=False, output=None):
-        """Read + decode the LOG partition from flash at `offset`."""
+    def f_decode_flash(self, offset=0x0, length=FLASH_LOG_SIZE,
+                       raw=False, output=None, hex_only=False):
+        """Read + decode (or hex-dump) the LOG partition from flash at `offset`."""
+        print(f"Reading {length} bytes from flash LOG @ 0x{offset:X} ...")
         data = self._read_flash(offset, length)
-        return self._decode_blob(data, raw, output)
+        return self._decode_blob(data, raw, output, EXT_FILL_BYTE, hex_only)
 
-    def f_decode_eeprom(self, offset=0x0, length=DEFAULT_READ_LEN,
-                        devAddr=None, raw=False, output=None):
-        """Read + decode the LOG partition from EEPROM at `offset`."""
+    def f_decode_eeprom(self, offset=0x0, length=EEPROM_LOG_SIZE,
+                        devAddr=None, raw=False, output=None, hex_only=False):
+        """Read + decode (or hex-dump) the LOG partition from EEPROM at `offset`."""
+        print(f"Reading {length} bytes from eeprom LOG @ 0x{offset:X} ...")
         data = self._read_eeprom(offset, length, devAddr)
-        return self._decode_blob(data, raw, output)
+        return self._decode_blob(data, raw, output, EXT_FILL_BYTE, hex_only)

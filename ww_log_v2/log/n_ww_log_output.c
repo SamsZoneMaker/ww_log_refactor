@@ -102,10 +102,10 @@ void n_ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...
         va_end(args);
     }
 
-    /* level is intentionally NOT encoded (see CLAUDE.md §2); it is passed to the
-     * backend dispatch so the RAM/storage backend can apply the storage-persist
-     * threshold and the ERR flag (level cannot be recovered from the bytes). */
-    encoded = N_WW_LOG_ENCODE(file_id, line, param_count);
+    /* level is encoded into the entry header so the flush path can filter, per
+     * entry, which entries reach external storage; it is still passed alongside
+     * for the UART path and the boot-wide ERR flag. */
+    encoded = N_WW_LOG_ENCODE(file_id, line, level, param_count);
 
     ww_log_backend_emit(encoded, params, param_count, level);
 }
@@ -137,14 +137,9 @@ static void backend_uart_emit(U32 encoded, const U32 *params, U8 param_count)
 #if (CONFIG_N_LOG_BACKEND_RAM == 1)
 static void backend_ram_emit(U32 encoded, const U32 *params, U8 param_count, U8 level)
 {
-    /* Storage-persist filter: entries above the threshold (default: DBG) are not
-     * written to RAM / external storage. level is not encoded, so it must be
-     * filtered here at emit time -> RAM content == storage content. */
-    if (level > N_WW_LOG_STORAGE_THRESHOLD)
-    {
-        return;
-    }
-
+    /* The RAM ring keeps EVERY entry that passed the runtime filter (all levels);
+     * the level->ext filter is applied later in the flush path (it reads level
+     * back out of each entry header), so nothing is dropped here. */
     (void)log_ram_write(encoded, (U32 *)params, param_count);
 
     /* Cheap "did anything bad happen this boot" signal for the host. */
@@ -159,7 +154,7 @@ void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count, U8 leve
 {
 #if (CONFIG_N_LOG_BACKEND_UART == 1)
     /* UART gets every entry that passed the runtime level/module filter,
-     * regardless of the storage-persist threshold. */
+     * regardless of the ext-persist threshold. */
     backend_uart_emit(encoded, params, param_count);
 #endif
 #if (CONFIG_N_LOG_BACKEND_RAM == 1)

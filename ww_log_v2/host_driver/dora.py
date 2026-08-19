@@ -1652,6 +1652,21 @@ class DORA:
         eeprom = self.__board_eeprom_get(v_boardId, v_devAddr)
         eeprom.f_write(v_offset, v_data, v_verify)
 
+    def f_eeprom_clean(self, v_offset, v_length, v_fill=0xFF, v_verify=False,
+                       v_boardId=0, v_devAddr=None):
+        '''
+        -> 清空 EEPROM 一段区域(EEPROM 无原生擦除, 用填充字节覆写实现)
+
+        参数
+            v_offset  - 必选   起始偏移
+            v_length  - 必选   清空长度(字节)
+            v_fill    - 可选   填充字节, 默认 0xFF(与 flash 擦除态一致, 日志解析视为空)
+            v_verify  - 可选   清空后回读校验
+            v_devAddr - 可选   eeprom I2C 7-bit 地址(0x50-0x57), 不指定则自动扫描
+        '''
+        eeprom = self.__board_eeprom_get(v_boardId, v_devAddr)
+        eeprom.f_clean(v_offset, v_length, v_fill, v_verify)
+
     def f_eeprom_burn(self, v_binFile, v_offset=0x0, v_verify=False,
                       v_boardId=0, v_devAddr=None):
         self.__check_if_bin_valid(v_binFile)
@@ -1675,7 +1690,7 @@ class DORA:
         return log_operation.Log(self, v_map, boardId=v_boardId)
 
     def f_log_decode_ram(self, v_map, v_addr, v_length=4096,
-                         v_raw=False, v_output=None, v_boardId=0):
+                         v_raw=False, v_output=None, v_hex=False, v_boardId=0):
         '''
         -> 直接读取掉电保持 RAM 区(DLM maintain region)的 encode 日志并 decode
 
@@ -1685,15 +1700,16 @@ class DORA:
             v_length - 可选   读取字节数, 默认 4096(一个 maintain region)
             v_raw    - 可选   每行后附带原始帧
             v_output - 可选   保存到文件; 后缀决定内容:
-                              .dump/.bin -> 原始 log 字节(不解析); .txt/其它 -> 解析后的可读行
+                              .dump/.bin -> 原始 log 字节(不解析); .txt/.log/其它 -> 文本
+            v_hex    - 可选   只按 4 个 U32/行 打印原始 encode 字, 不 decode
         '''
         log = self.__board_log_get(v_map, v_boardId)
-        return log.f_decode_ram(v_addr, v_length, v_raw, v_output)
+        return log.f_decode_ram(v_addr, v_length, v_raw, v_output, v_hex)
 
     def f_log_decode_flash(self, v_map, v_offset=0x0, v_length=4096,
-                           v_raw=False, v_output=None, v_boardId=0):
+                           v_raw=False, v_output=None, v_hex=False, v_boardId=0):
         '''
-        -> 直接读取 flash 上 LOG 分区的 encode 日志(LOGH blocks)并 decode
+        -> 直接读取 flash 上 LOG 分区(4KB)的 encode 日志('XLOG' append log)并 decode
 
         参数
             v_map    - 必选   ww_log_map.json 路径
@@ -1701,25 +1717,27 @@ class DORA:
             v_length - 可选   读取字节数, 默认 4096
             v_raw    - 可选   每行后附带原始帧
             v_output - 可选   保存到文件; 后缀决定内容:
-                              .dump/.bin -> 原始 log 字节(不解析); .txt/其它 -> 解析后的可读行
+                              .dump/.bin -> 原始 log 字节(不解析); .txt/.log/其它 -> 文本
+            v_hex    - 可选   只按 4 个 U32/行 打印原始 encode 字, 不 decode
         '''
         log = self.__board_log_get(v_map, v_boardId)
-        return log.f_decode_flash(v_offset, v_length, v_raw, v_output)
+        return log.f_decode_flash(v_offset, v_length, v_raw, v_output, v_hex)
 
-    def f_log_decode_eeprom(self, v_map, v_offset=0x0, v_length=4096,
-                            v_raw=False, v_output=None,
+    def f_log_decode_eeprom(self, v_map, v_offset=0x0, v_length=21 * 1024,
+                            v_raw=False, v_output=None, v_hex=False,
                             v_boardId=0, v_devAddr=None):
         '''
-        -> 直接读取 eeprom 上 LOG 分区的 encode 日志(LOGH blocks)并 decode
+        -> 直接读取 eeprom 上 LOG 分区(21KB)的 encode 日志('XLOG' append log)并 decode
 
         参数
             v_map     - 必选   ww_log_map.json 路径
             v_offset  - 可选   eeprom 内偏移, 默认 0x0
-            v_length  - 可选   读取字节数, 默认 4096
+            v_length  - 可选   读取字节数, 默认 21KB
             v_raw     - 可选   每行后附带原始帧
-            v_output  - 可选   同时把原始 dump 存到该文件
+            v_output  - 可选   保存到文件; 后缀决定内容同上
+            v_hex     - 可选   只按 4 个 U32/行 打印原始 encode 字, 不 decode
             v_devAddr - 可选   eeprom I2C 7-bit 地址(0x50-0x57), 不指定则自动扫描
         '''
         log = self.__board_log_get(v_map, v_boardId)
         return log.f_decode_eeprom(v_offset, v_length, v_devAddr,
-                                   v_raw, v_output)
+                                   v_raw, v_output, v_hex)

@@ -7,7 +7,7 @@
  *
  * This file is the sole owner of g_ram_buffer; the external-storage block ring
  * (n_ww_log_storage.c) never touches it directly -- it drains the ring through
- * the log_ram_pack_block() / log_ram_consume() helpers at the bottom of this
+ * the log_ram_pack_ext() / log_ram_consume() helpers at the bottom of this
  * file, so the RAM state stays encapsulated here. */
 /*************************** description end *****************************/
 
@@ -462,71 +462,88 @@ U16 log_ram_get_flags(void)
  *
  * These helpers let n_ww_log_storage.c drain the RAM ring without reaching into
  * g_ram_buffer. The flush driver calls (under the log mutex):
- *     packed = log_ram_pack_block(payload, &ecount);   // snapshot whole entries
- *     ... build the block, advance the ext ring ...
- *     log_ram_consume(packed);                         // advance the RAM cursor
+ *     packed = log_ram_pack_ext(stage, budget, &consumed); // filter whole entries
+ *     ... reserve write_off, append `packed` bytes ...
+ *     log_ram_consume(consumed);                            // advance RAM cursor
  * ========================================================================== */
 
 /**
- * @brief Pack whole entries from the RAM ring (oldest first) into a block
- *        payload, never splitting an entry, up to LOG_EXT_PAYLOAD_SIZE bytes.
- * @param dst     destination payload buffer (>= LOG_EXT_PAYLOAD_SIZE)
- * @param ecount  out: number of whole entries packed
- * @return payload bytes packed.
+ * @brief Walk whole entries from the RAM ring (oldest first) up to `budget` RAM
+ *        bytes, copying only the ones whose level passes the ext threshold into
+ *        `dst`. RAM keeps every level; external storage keeps a filtered subset.
+ * @param dst       destination buffer (must be >= `budget` bytes; the packed
+ *                  subset is always <= the bytes walked <= budget).
+ * @param budget    max RAM bytes to walk this call (bounds `dst` and per-call work).
+ * @param consumed  out: RAM bytes walked (persisted + filtered-out), which the
+ *                  caller passes to log_ram_consume() to advance the read cursor.
+ * @return bytes copied into `dst` (the persisted subset), 0 if all filtered out.
  * @note  Read-only on the ring: does NOT advance read_index. The caller pairs
  *        this with log_ram_consume() under the same lock.
  */
-U16 log_ram_pack_block(U8 *dst, U16 *ecount)
+U16 log_ram_pack_ext(U8 *dst, U16 budget, U16 *consumed)
 {
     U16 ri     = g_ram_buffer.header->read_index;
     U16 used   = get_current_usage();
+    U16 walked = 0;
     U16 packed = 0;
-    U16 count  = 0;
 
-    while (packed < used)
+    while (walked < used)
     {
-        U32 ehdr = *(U32 *)(g_ram_buffer.data + ri);
-        U8  pcnt = (U8)N_WW_LOG_PCNT_OF(ehdr);
-        U16 esz  = 4 + (U16)pcnt * 4;
+        U32 ehdr  = *(U32 *)(g_ram_buffer.data + ri);
+        U8  pcnt  = (U8)N_WW_LOG_PCNT_OF(ehdr);
+        U8  level = (U8)N_WW_LOG_LEVEL_OF(ehdr);
+        U16 esz   = 4 + (U16)pcnt * 4;
         U16 b;
 
-        if ((U32)packed + esz > LOG_EXT_PAYLOAD_SIZE)
+        if ((U32)walked + esz > budget)
         {
-            break;
+            break;                       /* keep the batch within budget */
         }
-        for (b = 0; b < esz; b += 4)
+
+        if (level <= N_WW_LOG_EXT_LEVEL_THRESHOLD)
         {
-            *(U32 *)(dst + packed + b) = *(U32 *)(g_ram_buffer.data + ri);
-            ri = log_ram_get_next_index(ri);
+            for (b = 0; b < esz; b += 4)
+            {
+                *(U32 *)(dst + packed + b) = *(U32 *)(g_ram_buffer.data + ri);
+                ri = log_ram_get_next_index(ri);
+            }
+            packed += esz;
         }
-        packed += esz;
-        count++;
+        else
+        {
+            for (b = 0; b < esz; b += 4)  /* filtered out: skip it in the ring */
+            {
+                ri = log_ram_get_next_index(ri);
+            }
+        }
+        walked += esz;
     }
-    *ecount = count;
+
+    *consumed = walked;
     return packed;
 }
 
 /**
- * @brief Advance the RAM consume cursor past `packed` bytes after a successful
- *        pack, decrement pending_len, bump flush_count and re-stamp the header.
- * @note  Caller must hold the lock and pass the exact byte count returned by the
- *        paired log_ram_pack_block() so read_index lands on an entry boundary.
+ * @brief Advance the RAM consume cursor past `consumed` bytes after a pack,
+ *        decrement pending_len, bump flush_count and re-stamp the header.
+ * @note  Caller must hold the lock and pass the exact byte count reported by the
+ *        paired log_ram_pack_ext() so read_index lands on an entry boundary.
  */
-void log_ram_consume(U16 packed)
+void log_ram_consume(U16 consumed)
 {
     LOG_RAM_HEADER_T *header = g_ram_buffer.header;
     U16 ri = header->read_index;
     U16 b;
 
-    for (b = 0; b < packed; b += 4)
+    for (b = 0; b < consumed; b += 4)
     {
         ri = log_ram_get_next_index(ri);
     }
     header->read_index = ri;
 
-    if (header->pending_len >= packed)
+    if (header->pending_len >= consumed)
     {
-        header->pending_len -= packed;
+        header->pending_len -= consumed;
     }
     else
     {

@@ -113,6 +113,18 @@ def cmd_verify(args, dora):
                          v_devAddr=args.addr)
 
 
+def cmd_clean(args, dora):
+    offset = parse_int(args.offset)
+    length = parse_int(args.length)
+    if length <= 0:
+        raise ValueError("length must be > 0")
+    dora.f_eeprom_clean(offset, length,
+                        v_fill=parse_int(args.fill),
+                        v_verify=args.verify,
+                        v_boardId=args.board,
+                        v_devAddr=args.addr)
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -140,6 +152,7 @@ def build_parser():
                '  %(prog)s write 0x100 0xDEADBEEF\n'
                '  %(prog)s verify firmware.bin\n'
                '  %(prog)s verify firmware.bin 0x1000\n'
+               '  %(prog)s clean 0x1AA00 0x5400            # wipe the LOG partition\n'
                '\n'
                'When --addr is omitted, the tool scans 0x50-0x57 and uses\n'
                'the lowest ACKing address (with P1/P0 computed per access).\n',
@@ -203,6 +216,23 @@ def build_parser():
     p_verify.add_argument('offset', nargs='?', default='0x0',
                           help='EEPROM start offset (default: 0x0)')
 
+    # --- clean ---
+    p_clean = sub.add_parser(
+        'clean',
+        help='clean a region by overwriting it with a fill byte (default 0xFF)',
+        description='EEPROM has no native clean (it is byte-writable), so this\n'
+                    'overwrites [offset, offset+length) with --fill (0xFF by\n'
+                    'default, matching flash cleand state so the log decoder sees\n'
+                    'the region as empty).',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_clean.add_argument('offset', help='Start offset (e.g. 0x1AA00)')
+    p_clean.add_argument('length', help='Number of bytes to clean (e.g. 0x5400)')
+    p_clean.add_argument('--fill', default='0xFF',
+                         help='Fill byte (default: 0xFF)')
+    p_clean.add_argument('--verify', action='store_true',
+                         help='Read back and verify after cleaning')
+
     return parser
 
 
@@ -221,6 +251,7 @@ def main():
         'write':   cmd_write,
         'burn':    cmd_burn,
         'verify':  cmd_verify,
+        'clean':   cmd_clean,
     }
 
     handler = dispatch.get(args.command)

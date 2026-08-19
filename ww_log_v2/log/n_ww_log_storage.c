@@ -1,14 +1,15 @@
 /*************************** description start ***************************/
-/* ww_log external-storage block ring.
+/* ww_log external-storage append log (log-structured).
  *
- * Owns the LOG partition on the external device (EEPROM/flash): a ring of
- * fixed-size self-describing LOGH blocks plus a fixed FLOG control footer in
- * the tail slot (geometry in n_ww_log_storage.h). Handles partition discovery,
- * the per-block flush (pack -> CRC -> slot write -> footer) and the RING/FREEZE
- * full policy.
+ * Owns the LOG partition on the external device (EEPROM/flash): an 8B 'XLOG'
+ * partition header written once, followed by an append-only stream of whole
+ * encoded entries (geometry in n_ww_log_storage.h). Handles partition discovery,
+ * the append flush (level-filter -> append at write_off) and the FREEZE/ERASE
+ * full policy. No per-slot erase (impossible on NOR sub-sector) and no per-flush
+ * footer -- write_off is RAM-resident and rebuilt on cold boot by scanning.
  *
  * The RAM ring lives entirely in n_ww_log_ram.c; the flush path drains it via
- * log_ram_pack_block() / log_ram_consume() rather than touching g_ram_buffer,
+ * log_ram_pack_ext() / log_ram_consume() rather than touching g_ram_buffer,
  * so the two halves stay decoupled. This whole file compiles to nothing unless
  * the EXT_MEM backend is enabled. */
 /*************************** description end *****************************/
@@ -35,7 +36,13 @@
 /* to be used only in this file */
 static const struct device *g_extmem_dev = NULL;
 static LOG_EXT_CTX_T g_log_ext_ctx = {0};
-/* footer is built on the fly in ext_footer_write() -- no persistent copy kept */
+
+#ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
+/* Set by log_ext_flush_marker_arm() at each flush-task wake; the first
+ * data-bearing log_ram_flush() of that drain consumes it by prepending one
+ * timestamped marker, then clears it so the rest of the drain stays unmarked. */
+static U8 s_flush_marker_due = 0;
+#endif
 /*************************** static variable end *****************************/
 
 
@@ -69,20 +76,6 @@ static int ext_dev_read(U32 abs_off, U8 *buf, U32 len)
     return WW_ERR;
 }
 
-/* Erase one block slot before re-writing it.
- * NOTE (real HW): NOR flash erase granularity is a sector (often 4KB), so a 512B
- * block ring can only be overwritten in place on EEPROM (byte-writable). On NOR
- * the whole LOG partition is one sector here; sub-sector slot erase is not
- * possible on real flash -> a flash ring needs sector-aware logic. TODO when the
- * flash backend is exercised on target. EEPROM (the primary path) is a no-op. */
-static void ext_dev_erase_block(U32 abs_off)
-{
-    if (g_log_ext_ctx.ext_mem_type == EXT_MEM_FLASH)
-    {
-        (void)flash_erase(g_extmem_dev, abs_off, LOG_EXT_BLOCK_SIZE);
-    }
-}
-
 /* Erase / clear the whole LOG partition at init.
  * BUGFIX: the old init called eeprom_write(dev, off, 0, size) -- data=NULL, which
  * the driver rejects (-EINVAL), so the area was never actually cleared. */
@@ -113,65 +106,71 @@ static int ext_partition_erase(void)
     return WW_ERR;
 }
 
-/* Write the ring-control footer to the fixed tail slot [log_size-32, log_size). */
-static void ext_footer_write(void)
+/* Write the 8B partition header at the partition base. Called once when the
+ * partition is (re)initialized fresh; never rewritten during normal flushing. */
+static int ext_parthdr_write(void)
 {
-    LOG_EXT_FOOTER_T f;
-    U32 foff = g_log_ext_ctx.log_offset + g_log_ext_ctx.log_size - LOG_EXT_FOOTER_SIZE;
+    LOG_EXT_PART_HDR_T h;
 
-    ww_memset(&f, 0, sizeof(f));
-    f.magic                = LOG_EXTMEM_MAGIC;
-    f.mem_type             = (U16)g_log_ext_ctx.ext_mem_type;
-    f.write_slot           = g_log_ext_ctx.write_slot;
-    f.wrap_count           = g_log_ext_ctx.wrap_count;
-    f.next_seq             = g_log_ext_ctx.next_seq;
-    f.log_count            = log_ram_get_log_count();
-    f.last_flush_timestamp = ww_cycle_get_32();
-    f.checksum             = LOG_CALC_STRUCT_CHECKSUM(&f);
+    ww_memset(&h, 0, sizeof(h));
+    h.magic    = LOG_EXTMEM_MAGIC;
+    h.version  = LOG_EXT_FORMAT_VERSION;
+    h.reserved = 0;
 
-    ext_dev_erase_block(foff);
-    (void)ext_dev_write(foff, (U8 *)&f, sizeof(f));
+    return ext_dev_write(g_log_ext_ctx.log_offset, (U8 *)&h, sizeof(h));
 }
 
-/* Try to resume the block ring from the tail footer after a (power-loss) restart.
- * The ext context (g_log_ext_ctx) is RAM-resident and lost on reboot, but the
- * device keeps the previously flushed blocks + footer. If the footer's magic,
- * checksum, device type and write_slot all validate, restore the ring cursor so
- * new flushes continue after the newest block WITHOUT erasing prior boots' logs.
- * Returns WW_TRUE on a successful resume, WW_FALSE on first use / no valid footer
- * (caller then erases and starts fresh).
- * @note Assumes block_count is already computed by the caller. */
-static WW_BOOL ext_footer_try_resume(void)
+/* Rebuild write_off after a (cold) restart by scanning the append stream.
+ * g_log_ext_ctx is RAM-resident and lost on a cold boot, but the device keeps
+ * the partition header + entries. If the header magic/version validate, walk
+ * whole entries from just past the header (each entry's pcnt gives its length)
+ * until the first 0xFFFFFFFF word (erased tail) or the partition end; write_off
+ * lands on that boundary so new flushes append after prior boots' logs WITHOUT
+ * erasing them. Returns WW_TRUE on a successful resume, WW_FALSE on first use /
+ * no valid header (caller then erases + writes a fresh header).
+ * @note A hot restart keeps the noinit ctx and never calls this. */
+static WW_BOOL ext_scan_write_off(void)
 {
-    LOG_EXT_FOOTER_T f;
-    U32 foff = g_log_ext_ctx.log_offset + g_log_ext_ctx.log_size - LOG_EXT_FOOTER_SIZE;
+    LOG_EXT_PART_HDR_T h;
+    U32 base = g_log_ext_ctx.log_offset;
+    U32 end  = g_log_ext_ctx.log_offset + g_log_ext_ctx.log_size;
+    U32 off  = base + LOG_EXT_PART_HDR_SIZE;
 
-    if (ext_dev_read(foff, (U8 *)&f, sizeof(f)) != WW_OK)
+    if (ext_dev_read(base, (U8 *)&h, sizeof(h)) != WW_OK)
     {
         return WW_FALSE;
     }
-    if (f.magic != LOG_EXTMEM_MAGIC)
+    if (h.magic != LOG_EXTMEM_MAGIC || h.version != LOG_EXT_FORMAT_VERSION)
     {
         return WW_FALSE;                       /* first use / erased / garbage */
     }
-    if (LOG_CALC_STRUCT_CHECKSUM(&f) != f.checksum)
+
+    /* Walk entries: read a 4B header, stop at the erased marker, else skip
+     * 4 + pcnt*4 bytes. Bounds-check every step so a corrupt pcnt cannot run off
+     * the partition. */
+    while (off + 4 <= end)
     {
-        return WW_FALSE;                       /* torn / corrupt footer        */
-    }
-    if (f.mem_type != (U16)g_log_ext_ctx.ext_mem_type)
-    {
-        return WW_FALSE;                       /* footer from a different layout */
-    }
-    if (f.write_slot >= g_log_ext_ctx.block_count)
-    {
-        return WW_FALSE;                       /* cursor out of range          */
+        U32 hdr;
+        U32 esz;
+
+        if (ext_dev_read(off, (U8 *)&hdr, 4) != WW_OK)
+        {
+            return WW_FALSE;
+        }
+        if (hdr == LOG_EXT_ERASED_WORD)
+        {
+            break;                             /* erased tail -> end of stream */
+        }
+        esz = 4 + (U32)N_WW_LOG_PCNT_OF(hdr) * 4;
+        if (off + esz > end)
+        {
+            break;                             /* truncated tail -> stop here  */
+        }
+        off += esz;
     }
 
-    g_log_ext_ctx.write_slot       = f.write_slot;
-    g_log_ext_ctx.wrap_count       = f.wrap_count;
-    g_log_ext_ctx.next_seq         = f.next_seq;
-    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset
-                                   + (U32)f.write_slot * LOG_EXT_BLOCK_SIZE;
+    g_log_ext_ctx.write_off = off;
+    g_log_ext_ctx.full = (off + 4 > end) ? WW_TRUE : WW_FALSE;
     return WW_TRUE;
 }
 
@@ -218,7 +217,7 @@ WW_RTN log_ext_mem_init(void)
     {
         g_log_ext_ctx.log_part_valid = WW_FALSE;
         g_log_ext_ctx.initialized = WW_TRUE;
-        g_log_ext_ctx.ext_write_offset = 0;
+        g_log_ext_ctx.write_off = 0;
         if (g_log_ext_ctx.ext_mem_type == EXT_MEM_NONE)
         {
             /* if no ext_mem, but not fatal */
@@ -283,43 +282,39 @@ WW_RTN log_ext_mem_init(void)
     g_log_ext_ctx.log_size = log_entry->part_size;
     g_log_ext_ctx.log_part_valid = WW_TRUE;
 
-    /* Step 4: Compute the block-ring geometry. */
-    g_log_ext_ctx.block_count = (U16)((g_log_ext_ctx.log_size - LOG_EXT_FOOTER_SIZE)
-                                      / LOG_EXT_BLOCK_SIZE);
-
-    if (g_log_ext_ctx.block_count == 0)
+    /* Step 4: The partition must hold at least the header + one max entry. */
+    if (g_log_ext_ctx.log_size < LOG_EXT_PART_HDR_SIZE + 4)
     {
-        /* Partition too small to hold even one block + footer. */
         g_log_ext_ctx.log_part_valid = WW_FALSE;
         g_log_ext_ctx.initialized = WW_TRUE;
         return LOG_EXT_ERR_NO_LOG_PART;
     }
 
-    /* Step 5: Resume from a valid footer (power-loss retained archive) so prior
-     * boots' blocks survive the reboot; only erase + start fresh when there is no
-     * valid footer (first use / corrupt). This is the device-side half of the
-     * "RAM preserved -> reset -> recover -> decode" closed loop. */
-    if (ext_footer_try_resume() == WW_TRUE)
+    /* Step 5: Resume the append stream (power-loss retained archive) by scanning
+     * from a valid partition header, so prior boots' entries survive the reboot;
+     * only erase + write a fresh header when there is no valid header (first use /
+     * corrupt). Device-side half of the "RAM preserved -> reset -> recover ->
+     * decode" closed loop. */
+    if (ext_scan_write_off() == WW_TRUE)
     {
         g_log_ext_ctx.initialized = WW_TRUE;
-        ww_printf("[LOG][EXT]: Resumed ring (slot=%u wrap=%u next_seq=%u)\n",
-                  g_log_ext_ctx.write_slot, g_log_ext_ctx.wrap_count,
-                  g_log_ext_ctx.next_seq);
+        ww_printf("[LOG][EXT]: Resumed append stream (write_off=0x%X full=%u)\n",
+                  g_log_ext_ctx.write_off, g_log_ext_ctx.full);
         return LOG_EXT_OK;
     }
-
-    g_log_ext_ctx.write_slot       = 0;
-    g_log_ext_ctx.wrap_count       = 0;
-    g_log_ext_ctx.next_seq         = 0;
-    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset;
 
     if (ext_partition_erase() != WW_OK)
     {
         g_log_ext_ctx.initialized = WW_TRUE;
         return LOG_EXT_ERR_CLEAR_FAIL;
     }
-
-    ext_footer_write();
+    if (ext_parthdr_write() != WW_OK)
+    {
+        g_log_ext_ctx.initialized = WW_TRUE;
+        return LOG_EXT_ERR_WRITE_FAIL;
+    }
+    g_log_ext_ctx.write_off = g_log_ext_ctx.log_offset + LOG_EXT_PART_HDR_SIZE;
+    g_log_ext_ctx.full = WW_FALSE;
     g_log_ext_ctx.initialized = WW_TRUE;
     return LOG_EXT_OK;
 }
@@ -338,12 +333,13 @@ int log_ext_mem_clear(void)
         return LOG_EXT_ERR_CLEAR_FAIL;
     }
 
-    /* Reset the ring back to slot 0. */
-    g_log_ext_ctx.write_slot       = 0;
-    g_log_ext_ctx.wrap_count       = 0;
-    g_log_ext_ctx.next_seq         = 0;
-    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset;
-    ext_footer_write();
+    /* Rewrite the header and reset the append cursor to just past it. */
+    if (ext_parthdr_write() != WW_OK)
+    {
+        return LOG_EXT_ERR_WRITE_FAIL;
+    }
+    g_log_ext_ctx.write_off = g_log_ext_ctx.log_offset + LOG_EXT_PART_HDR_SIZE;
+    g_log_ext_ctx.full = WW_FALSE;
 
     ww_printf("[LOG][EXT]: Clear done\n");
     return LOG_EXT_OK;
@@ -351,7 +347,7 @@ int log_ext_mem_clear(void)
 
 /* Drop the RAM-resident ext context so the next log_ext_mem_available() re-runs
  * log_ext_mem_init() -- i.e. simulate a reboot where g_log_ext_ctx is lost but
- * the device bytes (blocks + footer) persist. Used by the resume self-test; on
+ * the device bytes (header + entries) persist. Used by the resume self-test; on
  * real hardware the reboot zeroes the static for you. */
 void log_ext_force_reinit(void)
 {
@@ -360,33 +356,34 @@ void log_ext_force_reinit(void)
 }
 
 /**
- * @brief Flush ONE block of whole entries from the RAM ring to external storage.
+ * @brief Flush a batch of whole entries from the RAM ring to external storage.
  *
- * Packs as many complete entries as fit in a LOGH block payload (never splitting
- * an entry), stamps a per-block CRC, and writes the block to the current ring
- * slot, then updates the tail footer. On RING policy the oldest slot is
- * overwritten on wrap; on FREEZE flushing stops once every slot is filled.
+ * Walks up to LOG_EXT_FLUSH_STAGE_SIZE RAM bytes of whole entries; entries whose
+ * level passes N_WW_LOG_EXT_LEVEL_THRESHOLD are copied into a staging buffer and
+ * appended at write_off, the rest are just skipped. Every walked entry (persisted
+ * or filtered) is consumed from the RAM ring so it does not stall the cursor.
  *
- * Drains one block per call (matches the "~512B per move" cadence). The flush
- * task re-arms while pending_len stays above threshold, so a backlog drains over
- * successive wake-ups.
+ * On a partition-full condition the policy decides: FREEZE stops appending (the
+ * earliest persisted logs are preserved, the newest are dropped); ERASE wipes the
+ * partition, rewrites the header, and restarts the stream (the newest are kept).
  *
- * The RAM ring is snapshotted (log_ram_pack_block) and consumed
- * (log_ram_consume) under the log mutex, so concurrent writers always see a
- * consistent ring; the slow device I/O happens after the lock is released.
+ * The RAM ring is walked (log_ram_pack_ext) and consumed (log_ram_consume) under
+ * the log mutex, and write_off is reserved under it too, so concurrent writers
+ * see a consistent ring; the slow device I/O happens after the lock is released.
  *
- * @note NOT re-entrant: uses a static block buffer and fills it under the lock
- *       but writes the device after unlocking, so it must have a single caller
- *       (the flush task). Do not call it concurrently from another context.
+ * @note NOT re-entrant: uses a static staging buffer and reserves write_off under
+ *       the lock but writes the device after unlocking, so it must have a single
+ *       caller (the flush task). Do not call it concurrently.
  * @return LOG_EXT_OK on success/no-op, or a LOG_EXT_ERR_* code.
  */
 int log_ram_flush(void)
 {
-    static U8 block[LOG_EXT_BLOCK_SIZE];
-    LOG_BLOCK_HEADER_T *bh = (LOG_BLOCK_HEADER_T *)block;
-    U8 *payload = block + LOG_EXT_BLOCK_HEADER_SIZE;
-    U16 packed, ecount;
-    U32 slot_off;
+    static U8 stage[LOG_EXT_FLUSH_STAGE_SIZE];
+    U16 packed, consumed;
+    U16 lead = 0;                 /* marker bytes prepended ahead of `packed` */
+    U16 total;                    /* lead + packed: what actually hits the device */
+    U32 dst_off = 0, end, avail;
+    int need_erase = 0;
     int ret;
 
     if (log_ext_mem_available() == WW_FALSE)
@@ -402,60 +399,99 @@ int log_ram_flush(void)
         return LOG_EXT_OK;
     }
 
-#ifdef CONFIG_N_LOG_EXT_POLICY_FREEZE
-    if (log_ext_mem_is_full() == WW_TRUE)
+    if (g_log_ext_ctx.full == WW_TRUE)
     {
         log_mutex_unlock();
-        return LOG_EXT_ERR_PT_FULL;   /* archive frozen: keep earliest logs */
+        return LOG_EXT_ERR_PT_FULL;   /* FREEZE: archive frozen, keep earliest */
+    }
+
+#ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
+    /* If a marker is armed for this drain, reserve its 8 bytes at the front of the
+     * stage buffer; it is only committed below once we know packed > 0 (so an
+     * all-filtered flush never emits a lone marker and cannot spam the archive). */
+    if (s_flush_marker_due)
+    {
+        lead = LOG_EXT_FLUSH_MARKER_SIZE;
     }
 #endif
 
-    /* Snapshot one block of whole entries, then advance the RAM consume cursor
-     * (all under the lock so writers see a consistent ring). */
-    ww_memset(block, 0xFF, sizeof(block));   /* 0xFF padding == erased/end marker */
-    packed = log_ram_pack_block(payload, &ecount);
-    if (packed == 0)
+    /* Walk one staging buffer worth of whole entries, level-filtering into
+     * `stage` (after any reserved marker); `consumed` counts every entry walked
+     * so the RAM cursor advances past the filtered-out ones too. */
+    packed = log_ram_pack_ext(stage + lead, LOG_EXT_FLUSH_STAGE_SIZE - lead,
+                              &consumed);
+    if (consumed == 0)
     {
         log_mutex_unlock();
-        return LOG_EXT_OK;
+        return LOG_EXT_OK;            /* nothing walkable */
     }
 
-    log_ram_consume(packed);
-
-    bh->magic       = LOG_BLOCK_MAGIC;
-    bh->seq         = g_log_ext_ctx.next_seq;
-    bh->timestamp   = ww_cycle_get_32();
-    bh->data_size   = packed;
-    bh->entry_count = ecount;
-    bh->crc         = log_calc_checksum(payload, packed); /* payload is 4-aligned */
-    bh->reserved1   = 0;
-    bh->reserved2   = 0;
-
-    slot_off = g_log_ext_ctx.log_offset
-             + (U32)g_log_ext_ctx.write_slot * LOG_EXT_BLOCK_SIZE;
-
-    /* Advance ring position (next slot, wrap -> overwrite oldest). */
-    g_log_ext_ctx.next_seq++;
-    g_log_ext_ctx.write_slot++;
-    if (g_log_ext_ctx.write_slot >= g_log_ext_ctx.block_count)
+#ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
+    if (lead != 0 && packed != 0)
     {
-        g_log_ext_ctx.write_slot = 0;
-        g_log_ext_ctx.wrap_count++;
+        /* Data-bearing batch: stamp the reserved marker and disarm. */
+        ((U32 *)stage)[0] = LOG_EXT_FLUSH_MARKER_HDR;
+        ((U32 *)stage)[1] = (U32)xTaskGetTickCount();
+        s_flush_marker_due = 0;
     }
-    g_log_ext_ctx.ext_write_offset = g_log_ext_ctx.log_offset
-             + (U32)g_log_ext_ctx.write_slot * LOG_EXT_BLOCK_SIZE;
+    else
+    {
+        lead = 0;                    /* all filtered: drop the reservation */
+    }
+#endif
+    total = lead + packed;
 
+    /* Does the persisted batch (marker + entries) fit before the partition end? */
+    end   = g_log_ext_ctx.log_offset + g_log_ext_ctx.log_size;
+    avail = (g_log_ext_ctx.write_off < end) ? (end - g_log_ext_ctx.write_off) : 0;
+
+    if (total > avail)
+    {
+#ifdef CONFIG_N_LOG_EXT_FULL_FREEZE
+        /* Freeze: keep what is already persisted; drop these newest entries but
+         * still consume them from RAM so the ring keeps rolling for UART. */
+        g_log_ext_ctx.full = WW_TRUE;
+        log_ram_consume(consumed);
+        log_mutex_unlock();
+        return LOG_EXT_ERR_PT_FULL;
+#else
+        /* Erase: wipe + restart the stream, keeping these newest entries. The
+         * device erase is deferred to outside the lock. */
+        need_erase = 1;
+        dst_off = g_log_ext_ctx.log_offset + LOG_EXT_PART_HDR_SIZE;
+        g_log_ext_ctx.write_off = dst_off + total;
+#endif
+    }
+    else
+    {
+        dst_off = g_log_ext_ctx.write_off;
+        g_log_ext_ctx.write_off += total;
+    }
+
+    log_ram_consume(consumed);
     log_mutex_unlock();
 
-    /* Slow device I/O outside the lock. Write only header+payload (the slot tail
-     * keeps whatever was there; the decoder uses data_size and a fixed slot
-     * stride, so stale tail bytes are skipped). */
-    ext_dev_erase_block(slot_off);
-    ret = ext_dev_write(slot_off, block, LOG_EXT_BLOCK_HEADER_SIZE + packed);
-    ext_footer_write();
-
+    /* Slow device I/O outside the lock (single-caller flush task owns write_off,
+     * so the reserved region cannot be raced). */
+    if (need_erase)
+    {
+        (void)ext_partition_erase();
+        (void)ext_parthdr_write();
+    }
+    if (total == 0)
+    {
+        return LOG_EXT_OK;           /* every entry filtered out: nothing to write */
+    }
+    ret = ext_dev_write(dst_off, stage, total);
     return (ret == WW_OK) ? LOG_EXT_OK : LOG_EXT_ERR_WRITE_FAIL;
 }
+
+#ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
+void log_ext_flush_marker_arm(void)
+{
+    s_flush_marker_due = 1;
+}
+#endif
 
 U32 log_ext_get_log_size(void)
 {
@@ -484,36 +520,16 @@ U32 log_ext_get_log_offset(void)
 
 U32 log_ext_get_write_offset(void)
 {
-    return g_log_ext_ctx.ext_write_offset;
-}
-
-U16 log_ext_get_block_count(void)
-{
-    return g_log_ext_ctx.block_count;
-}
-
-U16 log_ext_get_write_slot(void)
-{
-    return g_log_ext_ctx.write_slot;
-}
-
-U32 log_ext_get_wrap_count(void)
-{
-    return g_log_ext_ctx.wrap_count;
-}
-
-U32 log_ext_get_next_seq(void)
-{
-    return g_log_ext_ctx.next_seq;
+    return g_log_ext_ctx.write_off;
 }
 
 WW_BOOL log_ext_mem_is_full(void)
 {
-    /* FREEZE: "full" once every slot has been written once (wrapped) -> stop
+    /* FREEZE: full once the append stream reached the partition end -> stop
      * flushing to preserve the earliest logs.
-     * RING: never full -- the oldest slot is overwritten on wrap. */
-#ifdef CONFIG_N_LOG_EXT_POLICY_FREEZE
-    return (g_log_ext_ctx.wrap_count >= 1) ? WW_TRUE : WW_FALSE;
+     * ERASE: never full -- the partition is wiped and reused on overflow. */
+#ifdef CONFIG_N_LOG_EXT_FULL_FREEZE
+    return g_log_ext_ctx.full ? WW_TRUE : WW_FALSE;
 #else
     return WW_FALSE;
 #endif
@@ -521,19 +537,18 @@ WW_BOOL log_ext_mem_is_full(void)
 
 U32 log_ext_mem_get_used(void)
 {
-    /* Bytes of block storage in use (capped at the block area when wrapped). */
-    U32 block_area = (U32)g_log_ext_ctx.block_count * LOG_EXT_BLOCK_SIZE;
-    if (g_log_ext_ctx.wrap_count > 0)
+    /* Bytes appended so far, i.e. header + entries. */
+    if (g_log_ext_ctx.write_off <= g_log_ext_ctx.log_offset)
     {
-        return block_area;
+        return 0;
     }
-    return (U32)g_log_ext_ctx.write_slot * LOG_EXT_BLOCK_SIZE;
+    return g_log_ext_ctx.write_off - g_log_ext_ctx.log_offset;
 }
 
 U32 log_ext_mem_get_remaining(void)
 {
-    U32 block_area = (U32)g_log_ext_ctx.block_count * LOG_EXT_BLOCK_SIZE;
-    return block_area - log_ext_mem_get_used();
+    U32 used = log_ext_mem_get_used();
+    return (used < g_log_ext_ctx.log_size) ? (g_log_ext_ctx.log_size - used) : 0;
 }
 
 WW_BOOL log_ext_mem_available(void)
@@ -586,7 +601,7 @@ void log_ext_mem_dump(void)
 
     ww_printf("\n========= External Memory LOG Dump =========\n");
     // ww_printf("Used: %u bytes\n",
-    //           g_log_ext_ctx.ext_write_offset, g_log_ext_ctx.log_size);
+    //           g_log_ext_ctx.write_off, g_log_ext_ctx.log_size);
     ww_printf("Log part offset is 0x%X\n", g_log_ext_ctx.log_offset);
     ww_printf("Log offset is 0x%X\n", g_log_ext_ctx.log_offset + offset);
 

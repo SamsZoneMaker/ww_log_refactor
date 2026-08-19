@@ -35,14 +35,16 @@ extern "C"
 #endif
 
 /**
- * Storage-persist threshold (compile-time). Entries with level > this are NOT
- * written to the RAM ring / external storage; they still go to UART. level is
- * not encoded, so the filter is applied at emit time and RAM == storage content.
- *   = N_WW_LOG_LEVEL_INF : persist ERR/WRN/INF, drop DBG (default)
- *   = N_WW_LOG_LEVEL_DBG : persist everything
+ * External-storage persist threshold (compile-time). The RAM ring keeps EVERY
+ * entry that passed the runtime filter; only entries with level <= this are
+ * copied on to external storage when the ring is flushed. level IS encoded into
+ * the entry header (see below), so this filter is applied in the flush path by
+ * reading the level back out of each entry -- RAM keeps all, ext keeps a subset.
+ *   = N_WW_LOG_LEVEL_WRN : persist only ERR/WRN to ext (default)
+ *   = N_WW_LOG_LEVEL_DBG : persist everything to ext
  */
-#ifndef N_WW_LOG_STORAGE_THRESHOLD
-#define N_WW_LOG_STORAGE_THRESHOLD    N_WW_LOG_LEVEL_INF
+#ifndef N_WW_LOG_EXT_LEVEL_THRESHOLD
+#define N_WW_LOG_EXT_LEVEL_THRESHOLD    N_WW_LOG_LEVEL_WRN
 #endif
 
 /* Number of runtime-maskable modules (g_ww_log_module_mask is a U32). */
@@ -63,28 +65,34 @@ extern "C"
 #define CURRENT_MODULE_STATIC_EN    0    /* unregistered file -> logs off */
 #endif
 
-/* ========= Encode bit-field layout (CLAUDE.md §2) =========
- *   31             20 19         6 5      0
- *   +-----------------+------------+--------+
- *   |   file_id (12)  |  line (14) |param_cnt|
- *   +-----------------+------------+--------+
+/* ========= Encode bit-field layout =========
+ *   31             20 19         6 5   4 3      0
+ *   +-----------------+------------+-----+--------+
+ *   |   file_id (12)  |  line (14) |lv(2)|pcnt(4) |
+ *   +-----------------+------------+-----+--------+
  *                       file_id = [ module_id : 5 ][ offset : 7 ]
  *
+ * level (2 bits) is encoded so the flush path can decide, per entry, whether to
+ * copy it to external storage (see N_WW_LOG_EXT_LEVEL_THRESHOLD) without a side
+ * table. That cost 2 bits from param_count: max params is now 15 (was 16).
+ *
  * The pack macro and the accessors are mode-independent: the storage layer
- * parses entries (param count, file_id) to walk the ring / validate data even
- * in STRING builds. */
-#define N_WW_LOG_ENCODE(file_id, line, pcnt) \
+ * parses entries (param count, level, file_id) to walk the ring / filter / etc.
+ * even in STRING builds. */
+#define N_WW_LOG_ENCODE(file_id, line, level, pcnt) \
     ( (((U32)(file_id)  & 0xFFF)  << 20) | \
       (((U32)(line)     & 0x3FFF) << 6)  | \
-      (((U32)(pcnt)     & 0x3F)) )
+      (((U32)(level)    & 0x3)    << 4)  | \
+      (((U32)(pcnt)     & 0xF)) )
 
 #define N_WW_LOG_FILEID_OF(encoded)    (((encoded) >> 20) & 0xFFF)
 #define N_WW_LOG_LINE_OF(encoded)      (((encoded) >> 6)  & 0x3FFF)
-#define N_WW_LOG_PCNT_OF(encoded)      ((encoded) & 0x3F)
+#define N_WW_LOG_LEVEL_OF(encoded)     (((encoded) >> 4)  & 0x3)
+#define N_WW_LOG_PCNT_OF(encoded)      ((encoded) & 0xF)
 #define N_WW_LOG_MODULE_OF(file_id)    (((file_id) >> 7) & 0x1F)
 #define N_WW_LOG_OFFSET_OF(file_id)    ((file_id) & 0x7F)
 
-#define N_WW_LOG_ENCODE_MAX_PARAMS     16
+#define N_WW_LOG_ENCODE_MAX_PARAMS     15
 
 /*************************** macro definition end *****************************/
 

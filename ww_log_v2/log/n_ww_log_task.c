@@ -47,6 +47,9 @@
 extern int log_ram_flush(void);
 extern int log_ext_mem_is_full(void);
 extern U16 log_ram_get_pending_len(void);
+#ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
+extern void log_ext_flush_marker_arm(void);
+#endif
 
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 /*************************** declaration end *****************************/
@@ -93,7 +96,13 @@ static void log_flush_task(void *pvParameters)
     {
         (void)xSemaphoreTake(g_flush_semaphore, flush_timeout);
 
-        /* Drain the backlog: keep flushing whole blocks while data is pending. */
+#ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
+        /* One timestamped marker per wake: the first data-bearing flush of this
+         * drain prepends it, so the host can split batches / detect reboots. */
+        log_ext_flush_marker_arm();
+#endif
+
+        /* Drain the backlog: keep flushing batches while data is pending. */
         while (log_ram_get_pending_len() > 0)
         {
             if (log_ext_mem_is_full())

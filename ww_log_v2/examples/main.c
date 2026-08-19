@@ -108,19 +108,18 @@ int main(void)
 #endif
 
 #if (CONFIG_N_LOG_BACKEND_EXT_MEM == 1)
-    /* ===== External-storage block-ring flush test (encode mode) ===== */
-    banner("EXT storage: block-ring flush");
+    /* ===== External-storage append-log flush test (encode mode) ===== */
+    banner("EXT storage: append-log flush");
     log_ext_mem_available();   /* trigger lazy ext init so geometry is known */
-    printf("Geometry: %u slots x %u B (payload %u B) + 32B footer\n",
-           log_ext_get_block_count(), (unsigned)LOG_EXT_BLOCK_SIZE,
-           (unsigned)LOG_EXT_PAYLOAD_SIZE);
+    printf("Partition: %u B (8B 'XLOG' header + append stream), write_off=0x%X\n",
+           (unsigned)log_ext_get_log_size(), log_ext_get_write_offset());
 
-    /* Generate enough volume to fill the ring and wrap it (>1 wrap). */
+    /* Generate a burst; only ERR/WRN entries are persisted to ext by default. */
     demo_burst(400);
 
-    /* The sim has no running flush task, so drain explicitly (one block/call). */
+    /* The sim has no running flush task, so drain explicitly. */
     {
-        int blocks = 0;
+        int passes = 0;
         while (log_ram_get_pending_len() > 0)
         {
             if (log_ram_flush() != 0)
@@ -128,11 +127,10 @@ int main(void)
                 printf("flush returned error, stopping\n");
                 break;
             }
-            blocks++;
+            passes++;
         }
-        printf("Drained %d blocks; write_slot=%u wrap=%u next_seq=%u\n",
-               blocks, log_ext_get_write_slot(), log_ext_get_wrap_count(),
-               log_ext_get_next_seq());
+        printf("Drained in %d passes; write_off=0x%X\n",
+               passes, log_ext_get_write_offset());
         printf("Ext used=%u / %u B, RAM pending=%u\n",
                log_ext_mem_get_used(), log_ext_get_log_size(),
                log_ram_get_pending_len());
