@@ -171,8 +171,13 @@ static void test_level_filter(void)
     N_LOG_WRN("selftest wrn %d", 2);
     N_LOG_INF("selftest inf %d", 3);
     N_LOG_DBG("selftest dbg %d", 4);
-    CHECK(log_ram_get_log_count() - before == 4,
-          "RAM keeps every level (ext level-filter happens at flush)");
+    /* The runtime threshold is wide open above, so what survives is decided by
+     * the COMPILE-time threshold, which drops the macros entirely. Levels are
+     * 0..3, so "threshold + 1" of the four calls are still in the binary --
+     * derive it rather than hardcode 4, or the suite only passes at the default
+     * setting. */
+    CHECK(log_ram_get_log_count() - before == N_WW_LOG_COMPILE_THRESHOLD + 1,
+          "RAM keeps every level that survived the compile threshold");
     CHECK((log_ram_get_flags() & LOG_FLAG_ERROR) != 0, "ERR sets LOG_FLAG_ERROR");
 }
 
@@ -271,8 +276,13 @@ static void test_ext_level_filter(void)
     {
         if (log_ram_flush() != LOG_EXT_OK) { break; }
     }
-    CHECK(log_ext_get_write_offset() == base_off + EXT_FIRST_BATCH_LEAD + 2 * 8,
-          "only the 2 ERR/WRN entries were appended to ext");
+    /* t_write_lvl bypasses the call macros, so all four reach the ring; the ext
+     * threshold then decides how many are copied on. Levels are 0..3, so
+     * "threshold + 1" of them persist at 8 bytes each. */
+    CHECK(log_ext_get_write_offset()
+              == base_off + EXT_FIRST_BATCH_LEAD
+                 + (N_WW_LOG_EXT_LEVEL_THRESHOLD + 1) * 8,
+          "only entries passing the ext level threshold were appended");
     CHECK(log_ram_get_pending_len() == 0,
           "all 4 entries consumed from RAM (INF/DBG dropped, not stuck)");
 }
