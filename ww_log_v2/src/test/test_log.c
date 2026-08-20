@@ -17,7 +17,7 @@
 #include "dlm_layout.h"
 #include "test_in.h"
 
-#ifdef CONFIG_N_LOG_MODE_ENCODE
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
 #include "log_map_id.h"   /* generated: N_WW_LOG_MAP_ID (boot-record test) */
 #include "version.h"      /* project:   BUILD_VERSION / BUILD_GIT_ID       */
 #endif
@@ -40,6 +40,17 @@ static void section(const char *title)
 {
     ww_printf("\n--- %s ---\n", title);
 }
+
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE != N_WW_LOG_MODE_DISABLE)
+static void test_runtime_default(void)
+{
+    section("Configured runtime level");
+    CHECK(n_ww_log_get_level_threshold() == CONFIG_N_LOG_RUNTIME_THRESHOLD,
+          "initial runtime level comes from .conf");
+}
+#endif
+
+#ifdef CONFIG_N_LOG_BACKEND_RAM
 
 /* Write one synthetic encoded entry with `pcnt` U32 params straight into the
  * RAM ring (bypasses the N_LOG_* macros for deterministic sizing). */
@@ -64,7 +75,9 @@ static void t_write(U8 pcnt)
 /* Bytes the flush path prepends to the FIRST batch a freshly cleared archive
  * receives: one boot record, so the archive can always name the map that
  * decodes it (n_ww_log_storage.c). Zero when there is no encode stream. */
-#if defined(CONFIG_N_LOG_MODE_ENCODE) && defined(CONFIG_N_LOG_BACKEND_EXT_MEM)
+#if defined(CONFIG_N_LOG) && \
+    (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE) && \
+    defined(CONFIG_N_LOG_BACKEND_EXT_MEM)
 #define EXT_FIRST_BATCH_LEAD    N_WW_LOG_BOOT_RECORD_SIZE
 #else
 #define EXT_FIRST_BATCH_LEAD    0
@@ -73,8 +86,6 @@ static void t_write(U8 pcnt)
 /* ====================================================================== */
 /* RAM ring tests (mode independent; need the RAM backend)                 */
 /* ====================================================================== */
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
-
 static void test_ram_init(void)
 {
     section("RAM init / clear");
@@ -159,7 +170,7 @@ static void test_cold_fallback(void)
 /* ====================================================================== */
 /* N_LOG_* path: level / module filters (encode mode feeds the RAM ring)   */
 /* ====================================================================== */
-#if defined(CONFIG_N_LOG_MODE_ENCODE)
+#if CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE
 
 static void test_level_filter(void)
 {
@@ -176,7 +187,7 @@ static void test_level_filter(void)
      * 0..3, so "threshold + 1" of the four calls are still in the binary --
      * derive it rather than hardcode 4, or the suite only passes at the default
      * setting. */
-    CHECK(log_ram_get_log_count() - before == N_WW_LOG_COMPILE_THRESHOLD + 1,
+    CHECK(log_ram_get_log_count() - before == CONFIG_N_LOG_COMPILE_THRESHOLD + 1,
           "RAM keeps every level that survived the compile threshold");
     CHECK((log_ram_get_flags() & LOG_FLAG_ERROR) != 0, "ERR sets LOG_FLAG_ERROR");
 }
@@ -187,10 +198,10 @@ static void test_module_mask(void)
     log_ram_init(WW_TRUE);
     U32 b0 = log_ram_get_log_count();
     n_ww_log_disable_module(CURRENT_MODULE_ID);
-    N_LOG_INF("masked %d", 0);
+    N_LOG_ERR("masked %d", 0);  /* ERR survives every valid compile threshold */
     CHECK(log_ram_get_log_count() == b0, "disabled module emits nothing");
     n_ww_log_enable_module(CURRENT_MODULE_ID);
-    N_LOG_INF("unmasked %d", 0);
+    N_LOG_ERR("unmasked %d", 0);
     CHECK(log_ram_get_log_count() == b0 + 1, "enabled module emits again");
 }
 
@@ -209,7 +220,7 @@ static void test_level_threshold(void)
     n_ww_log_set_level_threshold(N_WW_LOG_LEVEL_DBG);   /* restore */
 }
 
-#endif /* CONFIG_N_LOG_MODE_ENCODE */
+#endif /* encode mode */
 
 /* ====================================================================== */
 /* External storage block ring                                             */
@@ -281,7 +292,7 @@ static void test_ext_level_filter(void)
      * "threshold + 1" of them persist at 8 bytes each. */
     CHECK(log_ext_get_write_offset()
               == base_off + EXT_FIRST_BATCH_LEAD
-                 + (N_WW_LOG_EXT_LEVEL_THRESHOLD + 1) * 8,
+                 + (CONFIG_N_LOG_EXT_LEVEL_THRESHOLD + 1) * 8,
           "only entries passing the ext level threshold were appended");
     CHECK(log_ram_get_pending_len() == 0,
           "all 4 entries consumed from RAM (INF/DBG dropped, not stuck)");
@@ -331,7 +342,7 @@ static void test_ext_resume(void)
     log_ext_mem_clear();
 }
 
-#if defined(CONFIG_N_LOG_MODE_ENCODE)
+#if CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE
 /**
  * The boot record is what lets a host decode an archive that spans firmware
  * updates: n_ww_log_init() stamps one into the stream, naming the map that can
@@ -386,9 +397,9 @@ static void test_boot_record(void)
 
     log_ext_mem_clear();
 }
-#endif /* CONFIG_N_LOG_MODE_ENCODE */
+#endif /* encode mode */
 
-#if defined(CONFIG_N_LOG_EXT_FULL_FREEZE)
+#if CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_FREEZE
 /**
  * When the archive fills, the last batch must still top up the tail with as
  * many WHOLE entries as fit rather than being discarded outright (which used to
@@ -434,9 +445,90 @@ static void test_ext_full_freeze(void)
     CHECK(log_ext_get_write_offset() <= end, "write_off never runs past the end");
 
     log_ext_mem_clear();
+    CHECK((log_ram_get_flags() & LOG_FLAG_EXT_FULL) == 0,
+          "clearing the archive clears LOG_FLAG_EXT_FULL");
     log_ram_init(WW_TRUE);
 }
-#endif /* CONFIG_N_LOG_EXT_FULL_FREEZE */
+#endif /* freeze policy */
+
+#if (CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_ERASE) && \
+    (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
+static void test_ext_full_erase(void)
+{
+    section("External storage: ERASE restarts with a boot record");
+    if (log_ext_mem_available() != WW_TRUE)
+    {
+        CHECK(0, "external storage available");
+        return;
+    }
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+
+    U32 previous = log_ext_get_write_offset();
+    int wrapped = 0;
+    int guard = 0;
+
+    while (!wrapped && guard++ < 20000)
+    {
+        t_write(1);
+        if (log_ram_get_pending_len() >= LOG_EXT_FLUSH_STAGE_SIZE)
+        {
+            U32 before = log_ext_get_write_offset();
+            if (log_ram_flush() != LOG_EXT_OK)
+            {
+                break;
+            }
+            previous = log_ext_get_write_offset();
+            wrapped = previous < before;
+        }
+    }
+
+    CHECK(wrapped, "partition erased and append cursor restarted");
+    CHECK(previous <= log_ext_get_log_offset() + log_ext_get_log_size(),
+          "write_off remains inside the LOG partition");
+
+    static U8 buf[64];
+    log_ext_mem_read(buf, sizeof(buf));
+    U32 *w = (U32 *)(buf + LOG_EXT_PART_HDR_SIZE);
+    CHECK(w[0] == (U32)N_WW_LOG_BOOT_RECORD_HDR,
+          "restarted archive begins with a boot record");
+    CHECK(w[1] == (U32)N_WW_LOG_MAP_ID,
+          "restarted archive carries the current map_id");
+
+    /* Regression: if the previous firmware filled the archive exactly and the
+     * device then rebooted, the cold scan reconstructs ctx.full=true. ERASE
+     * must still accept the next entry and recycle the partition; treating
+     * ctx.full like FREEZE here used to leave the archive permanently stuck. */
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+    U32 end = log_ext_get_log_offset() + log_ext_get_log_size();
+    guard = 0;
+    while (log_ext_get_write_offset() < end && guard++ < 20000)
+    {
+        t_write(1);
+        if (log_ram_flush() != LOG_EXT_OK)
+        {
+            break;
+        }
+    }
+    CHECK(log_ext_get_write_offset() == end,
+          "test archive can be filled exactly to the partition end");
+
+    log_ext_force_reinit();
+    CHECK(log_ext_mem_available() == WW_TRUE,
+          "cold scan resumes an exactly-full ERASE archive");
+    t_write(1);
+    CHECK(log_ram_flush() == LOG_EXT_OK,
+          "ERASE accepts a new batch after resuming a full archive");
+    CHECK(log_ext_get_write_offset()
+              == log_ext_get_log_offset() + LOG_EXT_PART_HDR_SIZE
+                 + N_WW_LOG_BOOT_RECORD_SIZE + 8,
+          "post-reboot erase restarts at header + boot record + entry");
+
+    log_ext_mem_clear();
+    log_ram_init(WW_TRUE);
+}
+#endif
 
 #if defined(CONFIG_N_LOG_EXT_FLUSH_MARKER)
 static void test_ext_flush_marker(void)
@@ -500,14 +592,18 @@ int test_log_run_all(void)
     s_fail = 0;
     ww_printf("\n========== ww_log v2 self-test ==========\n");
 
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE != N_WW_LOG_MODE_DISABLE)
+    test_runtime_default();
+#endif
+
+#ifdef CONFIG_N_LOG_BACKEND_RAM
     test_ram_init();
     test_ram_basic_write();
     test_ram_overflow();
     test_ram_corruption();
     test_hot_restart();
     test_cold_fallback();
-#if defined(CONFIG_N_LOG_MODE_ENCODE)
+#if CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE
     test_level_filter();
     test_module_mask();
     test_level_threshold();
@@ -516,18 +612,22 @@ int test_log_run_all(void)
     test_ext_flush();
     test_ext_level_filter();
     test_ext_resume();
-#if defined(CONFIG_N_LOG_MODE_ENCODE)
+#if CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE
     test_boot_record();
 #endif
-#if defined(CONFIG_N_LOG_EXT_FULL_FREEZE)
+#if CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_FREEZE
     test_ext_full_freeze();
+#endif
+#if (CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_ERASE) && \
+    (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
+    test_ext_full_erase();
 #endif
 #if defined(CONFIG_N_LOG_EXT_FLUSH_MARKER)
     test_ext_flush_marker();
 #endif
 #endif
     /* leave the log in a clean state for whatever runs next */
-    n_ww_log_set_level_threshold(N_WW_LOG_LEVEL_DBG);
+    n_ww_log_set_level_threshold(CONFIG_N_LOG_RUNTIME_THRESHOLD);
     log_ram_init(WW_TRUE);
 #else
     ww_printf("  (RAM backend off -> storage self-tests skipped)\n");

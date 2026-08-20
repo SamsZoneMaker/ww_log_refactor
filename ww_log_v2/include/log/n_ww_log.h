@@ -28,11 +28,6 @@ extern "C"
 #include "n_ww_log_output.h"
 #include "n_ww_log_macro.h"
 
-#if defined(CONFIG_N_LOG_MODE_ENCODE) && defined(CONFIG_N_LOG_BACKEND_RAM)
-#include "n_ww_log_storage.h"
-#endif
-
-
 /*************************** type definition start ***************************/
 /*************************** type definition end *****************************/
 

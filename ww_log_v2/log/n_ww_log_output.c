@@ -7,13 +7,15 @@
 #include "log/n_ww_log_macro.h"   /* N_LOG and N_RETURN macros, pulls def + output */
 #include "log/n_ww_log_api.h"     /* g_ww_log_module_mask / g_ww_log_level_threshold */
 
-#if (CONFIG_N_LOG_BACKEND_RAM == 1) || (CONFIG_N_LOG_BACKEND_EXT_MEM == 1)
+#if defined(CONFIG_N_LOG_BACKEND_RAM) || defined(CONFIG_N_LOG_BACKEND_EXT_MEM)
 #include "log/n_ww_log_storage.h"
 #endif
 
 
 /* ==================== STRING mode output ==================== */
-#if defined(CONFIG_N_LOG_MODE_STRING)
+#if defined(CONFIG_N_LOG) && \
+    (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_STRING) && \
+    defined(CONFIG_N_LOG_BACKEND_UART)
 
 #define N_WW_LOG_BUF_SIZE    (128)
 
@@ -24,11 +26,11 @@ static const char *level_names[] = {
     "DBG",  /* N_WW_LOG_LEVEL_DBG */
 };
 
-static char s_wwLogBuf[N_WW_LOG_BUF_SIZE] = {0};
-
 void n_ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
                          const char *fmt, ...)
 {
+    /* Per-call storage keeps concurrent tasks from corrupting one shared line. */
+    char ww_log_buf[N_WW_LOG_BUF_SIZE] = {0};
     va_list ap = {0};
     U32 header_len = 0;
     int remain_size = 0;
@@ -47,33 +49,47 @@ void n_ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
         return;
     }
 
-    header_len = ww_snprintf(s_wwLogBuf, sizeof(s_wwLogBuf),
+    header_len = ww_snprintf(ww_log_buf, sizeof(ww_log_buf),
                              "[%s] %s:%u - ", level_names[level], filename, line);
 
-    if (header_len <= 0 || header_len >= sizeof(s_wwLogBuf))
+    if (header_len <= 0 || header_len >= sizeof(ww_log_buf))
     {
-        // ww_printf("Failed to output: Header len too long\n");
         return;
     }
 
-    remain_size = sizeof(s_wwLogBuf) - header_len;
+    remain_size = sizeof(ww_log_buf) - header_len;
 
     va_start(ap, fmt);
-    ret = ww_vsnprintf(s_wwLogBuf + header_len, remain_size,
+    ret = ww_vsnprintf(ww_log_buf + header_len, remain_size,
                        LINESEP_FORMAT_WINDOWS, fmt, ap);
     va_end(ap);
 
     if (ret)
     {
-        ww_printf("%s\n", s_wwLogBuf);
+        ww_printf("%s\n", ww_log_buf);
     }
 }
 
-#endif /* CONFIG_N_LOG_MODE_STRING */
+#elif defined(CONFIG_N_LOG) && \
+      (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_STRING)
+
+/* STRING has no RAM wire representation. With UART disabled it is therefore a
+ * deliberate no-op, matching the backend selection instead of printing anyway. */
+void n_ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
+                         const char *fmt, ...)
+{
+    (void)module_id;
+    (void)filename;
+    (void)line;
+    (void)level;
+    (void)fmt;
+}
+
+#endif /* string mode */
 
 
 /* ==================== ENCODE mode output ==================== */
-#ifdef CONFIG_N_LOG_MODE_ENCODE
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
 
 void n_ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...)
 {
@@ -110,14 +126,14 @@ void n_ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...
     ww_log_backend_emit(encoded, params, param_count, level);
 }
 
-#endif /* CONFIG_N_LOG_MODE_ENCODE */
+#endif /* encode mode */
 
 
 /* ============================================================
  * Backend dispatch (encode mode, always compiled)
  * ============================================================ */
 
-#if (CONFIG_N_LOG_BACKEND_UART == 1)
+#ifdef CONFIG_N_LOG_BACKEND_UART
 static void backend_uart_emit(U32 encoded, const U32 *params, U8 param_count)
 {
     U8 i;
@@ -134,31 +150,25 @@ static void backend_uart_emit(U32 encoded, const U32 *params, U8 param_count)
 }
 #endif
 
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
-static void backend_ram_emit(U32 encoded, const U32 *params, U8 param_count, U8 level)
+#ifdef CONFIG_N_LOG_BACKEND_RAM
+static void backend_ram_emit(U32 encoded, const U32 *params, U8 param_count)
 {
     /* The RAM ring keeps EVERY entry that passed the runtime filter (all levels);
      * the level->ext filter is applied later in the flush path (it reads level
      * back out of each entry header), so nothing is dropped here. */
-    (void)log_ram_write(encoded, (U32 *)params, param_count);
-
-    /* Cheap "did anything bad happen this boot" signal for the host. */
-    if (level == N_WW_LOG_LEVEL_ERR)
-    {
-        log_ram_mark_error();
-    }
+    (void)log_ram_write(encoded, params, param_count);
 }
 #endif
 
 void ww_log_backend_emit(U32 encoded, const U32 *params, U8 param_count, U8 level)
 {
-#if (CONFIG_N_LOG_BACKEND_UART == 1)
+#ifdef CONFIG_N_LOG_BACKEND_UART
     /* UART gets every entry that passed the runtime level/module filter,
      * regardless of the ext-persist threshold. */
     backend_uart_emit(encoded, params, param_count);
 #endif
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
-    backend_ram_emit(encoded, params, param_count, level);
+#ifdef CONFIG_N_LOG_BACKEND_RAM
+    backend_ram_emit(encoded, params, param_count);
 #endif
 
     (void)encoded; (void)params; (void)param_count; (void)level;

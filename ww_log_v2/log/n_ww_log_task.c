@@ -10,7 +10,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
-#include "timers.h"
 
 #include "log/n_ww_log_task.h"
 
@@ -23,40 +22,13 @@
 /*************************** macro definition start ***************************/
 /* to be used only in this file */
 
-/* Mutex acquire timeout for the (RAM-backend) writer path. Lives outside the
- * EXT_MEM guard because log_mutex_lock() is compiled whenever RAM is on. */
-#ifndef LOG_WRITE_TIMEOUT_MS
-#  ifdef CONFIG_N_LOG_WRITE_TIMEOUT_MS
-#    define LOG_WRITE_TIMEOUT_MS   (CONFIG_N_LOG_WRITE_TIMEOUT_MS)
-#  else
-#    define LOG_WRITE_TIMEOUT_MS   (6)
-#  endif
-#endif
-
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
-
-#ifndef LOG_FLUSH_TASK_STACK_SIZE
-#  ifdef CONFIG_N_LOG_FLUSH_TASK_STACK_SIZE
-#    define LOG_FLUSH_TASK_STACK_SIZE   (CONFIG_N_LOG_FLUSH_TASK_STACK_SIZE)
-#  else
-#    define LOG_FLUSH_TASK_STACK_SIZE   (256)
-#  endif
+#ifndef CONFIG_N_LOG_FLUSH_TIMEOUT_MS
+#error "CONFIG_N_LOG_FLUSH_TIMEOUT_MS is required when EXT_MEM is enabled"
 #endif
-#ifndef LOG_FLUSH_TASK_PRIORITY
-#  ifdef CONFIG_N_LOG_FLUSH_TASK_PRIORITY
-#    define LOG_FLUSH_TASK_PRIORITY   (CONFIG_N_LOG_FLUSH_TASK_PRIORITY)
-#  else
-#    define LOG_FLUSH_TASK_PRIORITY   (1)
-#  endif
+#if CONFIG_N_LOG_FLUSH_TIMEOUT_MS <= 0
+#error "CONFIG_N_LOG_FLUSH_TIMEOUT_MS must be greater than zero"
 #endif
-#ifndef LOG_FLUSH_TIMEOUT_MS
-#  ifdef CONFIG_N_LOG_FLUSH_TIMEOUT_MS
-#    define LOG_FLUSH_TIMEOUT_MS   (CONFIG_N_LOG_FLUSH_TIMEOUT_MS)
-#  else
-#    define LOG_FLUSH_TIMEOUT_MS   (10000)
-#  endif
-#endif
-
 #endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 /*************************** macro definition end *****************************/
 
@@ -66,7 +38,7 @@
 
 /*************************** declaration start ***************************/
 /* to be used only in this file */
-#ifdef CONFIG_N_LOG_BACKEND_RAM
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
 extern int log_ram_flush(void);
 extern int log_ext_mem_is_full(void);
@@ -80,13 +52,11 @@ extern void log_ext_flush_marker_arm(void);
 
 /*************************** static variable start ***************************/
 /* to be used only in this file */
-#ifdef CONFIG_N_LOG_BACKEND_RAM
-
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 static TaskHandle_t      g_flush_task_handle = NULL;
 static SemaphoreHandle_t g_flush_semaphore = NULL;
+#endif
 static SemaphoreHandle_t g_log_mutex = NULL;
-
-#endif /* CONFIG_N_LOG_BACKEND_EXT_MEM */
 /*************************** static variable end *****************************/
 
 /*************************** static function start ***************************/
@@ -99,7 +69,7 @@ static SemaphoreHandle_t g_log_mutex = NULL;
  * Two flush triggers, both handled here:
  *   - volume: a writer signals the semaphore once pending_len >= threshold
  *             (~one block); the task wakes immediately.
- *   - time:   xSemaphoreTake also returns after LOG_FLUSH_TIMEOUT_MS with no
+ *   - time:   xSemaphoreTake also returns after CONFIG_N_LOG_FLUSH_TIMEOUT_MS with no
  *             signal, so whatever is pending (even below threshold) still gets
  *             flushed periodically.
  *
@@ -112,7 +82,7 @@ static void log_flush_task(void *pvParameters)
 {
     (void)pvParameters;
 
-    const TickType_t flush_timeout = pdMS_TO_TICKS(LOG_FLUSH_TIMEOUT_MS);
+    const TickType_t flush_timeout = pdMS_TO_TICKS(CONFIG_N_LOG_FLUSH_TIMEOUT_MS);
 
     ww_printf("LOG_FLUSH_TASK: Started\n");
 
@@ -235,7 +205,8 @@ WW_RTN log_mutex_lock(void)
     {
         return WW_OK;
     }
-    if (xSemaphoreTake(g_log_mutex, pdMS_TO_TICKS(LOG_WRITE_TIMEOUT_MS)) == pdTRUE)
+    if (xSemaphoreTake(g_log_mutex,
+                       pdMS_TO_TICKS(LOG_WRITE_TIMEOUT_MS)) == pdTRUE)
     {
         return WW_OK;
     }

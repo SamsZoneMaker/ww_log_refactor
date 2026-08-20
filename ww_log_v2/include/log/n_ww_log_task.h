@@ -19,6 +19,12 @@ extern "C"
 #ifdef CONFIG_N_LOG_BACKEND_RAM
 
 /*************************** macro definition start ***************************/
+#define LOG_WRITE_TIMEOUT_MS          6
+
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
+#define LOG_FLUSH_TASK_STACK_SIZE     256
+#define LOG_FLUSH_TASK_PRIORITY       1
+#endif
 /*************************** macro definition end *****************************/
 
 /*************************** type definition start ***************************/

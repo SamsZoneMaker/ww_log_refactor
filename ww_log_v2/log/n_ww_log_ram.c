@@ -119,7 +119,11 @@ void log_ram_init(bool force_clear)
     g_ram_buffer.header = (LOG_RAM_HEADER_T *)DLM_MAINTAIN_LOG_BASE_ADDR;
     g_ram_buffer.data = (U8 *)(DLM_MAINTAIN_LOG_BASE_ADDR + LOG_RAM_HEADER_SIZE);
     g_ram_buffer.data_size = LOG_RAM_DATA_SIZE;
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
     g_ram_buffer.threshold = LOG_RAM_FLUSH_THRESHOLD;
+#else
+    g_ram_buffer.threshold = 0;
+#endif
 
     WW_RTN rtn = 0;
 
@@ -176,7 +180,7 @@ U32 log_calc_checksum(const void *data, U32 len)
     return sum;
 }
 
-WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count)
+WW_RTN log_ram_write(U32 encoded, const U32 *params, U8 param_count)
 {
     LOG_RAM_HEADER_T *header = g_ram_buffer.header;
     U16 write_idx;
@@ -186,6 +190,15 @@ WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count)
     /* Not initialised yet (LOG fired before n_ww_log_init): g_ram_buffer.header
      * is NULL, so bail instead of dereferencing it. */
     if (header == NULL)
+    {
+        return WW_ERR;
+    }
+
+    /* A mismatched count would make the ring walker use a different length
+     * from the writer and corrupt every entry after this one. */
+    if (param_count > N_WW_LOG_ENCODE_MAX_PARAMS ||
+        (param_count > 0 && params == NULL) ||
+        N_WW_LOG_PCNT_OF(encoded) != param_count)
     {
         return WW_ERR;
     }
@@ -228,6 +241,11 @@ WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count)
 
     header->write_index = write_idx;
     header->log_count  += 1;
+    if (N_WW_LOG_LEVEL_OF(encoded) == N_WW_LOG_LEVEL_ERR)
+    {
+        /* Set it while the same mutex protects the header/checksum update. */
+        header->flags |= LOG_FLAG_ERROR;
+    }
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
     header->pending_len += required;
@@ -245,17 +263,6 @@ WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count)
     return WW_OK;
 }
 
-/**
- * @brief Mark that an ERR-level entry was recorded this boot (LOG_FLAG_ERROR).
- *        level is not encoded into entries, so the emit layer calls this for
- *        ERR logs to give the host a cheap "did anything bad happen" signal.
- */
-void log_ram_mark_error(void)
-{
-    g_ram_buffer.header->flags |= LOG_FLAG_ERROR;
-    g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
-}
-
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 /**
  * @brief Record that the external archive filled up (FREEZE policy).
@@ -267,7 +274,23 @@ void log_ram_mark_error(void)
  */
 void log_ram_set_ext_full(void)
 {
+    if (g_ram_buffer.header == NULL)
+    {
+        return;
+    }
     g_ram_buffer.header->flags |= LOG_FLAG_EXT_FULL;
+    g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
+}
+
+/** @brief Clear the persisted archive-full indication after a successful wipe.
+ *  @note Caller serialises this with writers/flushes through the log mutex. */
+void log_ram_clear_ext_full(void)
+{
+    if (g_ram_buffer.header == NULL)
+    {
+        return;
+    }
+    g_ram_buffer.header->flags &= (U16)~LOG_FLAG_EXT_FULL;
     g_ram_buffer.header->checksum = LOG_CALC_STRUCT_CHECKSUM(g_ram_buffer.header);
 }
 #endif
@@ -520,7 +543,7 @@ U16 log_ram_pack_ext(U8 *dst, U16 budget, U16 *consumed)
             break;                       /* keep the batch within budget */
         }
 
-        if (level <= N_WW_LOG_EXT_LEVEL_THRESHOLD)
+        if (level <= CONFIG_N_LOG_EXT_LEVEL_THRESHOLD)
         {
             for (b = 0; b < esz; b += 4)
             {

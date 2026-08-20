@@ -1,0 +1,98 @@
+# Kconfig fragment for integrating ww_log v2 into the firmware.
+#
+# The firmware Kconfig/.conf pipeline is the single source of user-selectable
+# log policy. Fixed implementation tunings live in their owning C headers; keep
+# this file and sim/log.conf in step when a Kconfig symbol is added.
+
+menu "New log module (ww_log v2)"
+
+config N_LOG
+    bool "Enable the new log module"
+    default n
+    help
+      Enable ww_log v2.
+
+config N_LOG_MODE
+    int "Log mode (string=1, encode=2, disable=3)"
+    depends on N_LOG
+    range 1 3
+    default 1
+    help
+      1=string: plain-text UART output; format strings remain in the image.
+      2=encode: 4-byte header plus U32 parameters, decoded with the map JSON.
+      3=disable: compile every N_LOG_* call to a no-op.
+
+# --- Backends ---------------------------------------------------------------
+
+config N_LOG_BACKEND_UART
+    bool "Enable UART log output"
+    depends on N_LOG && N_LOG_MODE != 3
+    default y if N_LOG_MODE = 1
+
+config N_LOG_BACKEND_RAM
+    bool "Enable RAM log output"
+    depends on N_LOG && N_LOG_MODE = 2
+    help
+      Ring buffer in the power-loss-retained DLM maintain region. The external
+      backend drains this ring, so EXT_MEM requires RAM.
+
+config N_LOG_BACKEND_EXT_MEM
+    bool "Enable external-memory log output"
+    depends on N_LOG && N_LOG_MODE = 2 && N_LOG_BACKEND_RAM
+    help
+      Append encoded entries to the LOG partition described by the external
+      device's partition table.
+
+# --- Levels -----------------------------------------------------------------
+
+config N_LOG_COMPILE_THRESHOLD
+    int "Compile-time log level (error=0, warning=1, info=2, debug=3)"
+    depends on N_LOG && N_LOG_MODE != 3
+    range 0 3
+    default 3
+    help
+      Calls above this level are compiled out and take no image space.
+
+config N_LOG_RUNTIME_THRESHOLD
+    int "Initial runtime log level (error=0, warning=1, info=2, debug=3)"
+    depends on N_LOG && N_LOG_MODE != 3
+    range 0 3
+    default 3
+    help
+      Initial global runtime threshold. It can still be changed later through
+      n_ww_log_set_level_threshold().
+
+config N_LOG_EXT_LEVEL_THRESHOLD
+    int "External-storage level (error=0, warning=1, info=2, debug=3)"
+    depends on N_LOG_BACKEND_EXT_MEM
+    range 0 3
+    default 1
+    help
+      RAM keeps every entry that passed the runtime filter; external storage
+      keeps only entries at or below this threshold.
+
+# --- External storage behaviour --------------------------------------------
+
+config N_LOG_EXT_FULL
+    int "LOG-partition full policy (freeze=1, erase=2)"
+    depends on N_LOG_BACKEND_EXT_MEM
+    range 1 2
+    default 1
+    help
+      1=freeze: stop appending and preserve the earliest archived entries.
+      2=erase: erase the partition and restart with the newest batch.
+
+config N_LOG_EXT_FLUSH_MARKER
+    bool "Add a timestamp marker to each flush drain"
+    depends on N_LOG_BACKEND_EXT_MEM
+    default y
+
+# --- Tuning -----------------------------------------------------------------
+
+config N_LOG_FLUSH_TIMEOUT_MS
+    int "Flush task wake interval (ms)"
+    depends on N_LOG_BACKEND_EXT_MEM
+    range 1 86400000
+    default 10000
+
+endmenu

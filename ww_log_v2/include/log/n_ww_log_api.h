@@ -24,7 +24,7 @@ extern U8  g_ww_log_level_threshold;   /* drop entries with level > this */
 
 void n_ww_log_init(void);
 
-#ifdef CONFIG_N_LOG_MODE_ENCODE
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
 /* Stamp a boot record (map identity + firmware version) into the stream.
  * Called by n_ww_log_init(), and again whenever the external archive is wiped:
  * an archive with no boot record in front of its entries cannot tell the host

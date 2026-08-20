@@ -11,7 +11,7 @@
 #include "log/n_ww_log_storage.h"   /* log_ram_init (RAM backend) */
 #include "log/n_ww_log_task.h"      /* log_lock_init / log_flush_task_init */
 
-#ifdef CONFIG_N_LOG_MODE_ENCODE
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
 #include "log/n_ww_log_output.h"    /* ww_log_backend_emit (boot record) */
 #include "log_map_id.h"             /* generated: N_WW_LOG_MAP_ID */
 #include "version.h"                /* project:   BUILD_VERSION / BUILD_GIT_ID */
@@ -24,7 +24,7 @@
 #ifndef BUILD_GIT_ID
 #define BUILD_GIT_ID     0u
 #endif
-#endif /* CONFIG_N_LOG_MODE_ENCODE */
+#endif /* encode mode */
 
 /*************************** global variable start ***************************/
 /* to be used in all files */
@@ -36,7 +36,11 @@
  */
 U32 g_ww_log_module_mask = 0xFFFFFFFF;
 
-U8 g_ww_log_level_threshold = N_WW_LOG_LEVEL_DBG; /* allow all by default */
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE != N_WW_LOG_MODE_DISABLE)
+U8 g_ww_log_level_threshold = CONFIG_N_LOG_RUNTIME_THRESHOLD;
+#else
+U8 g_ww_log_level_threshold = N_WW_LOG_LEVEL_ERR;
+#endif
 
 /*************************** global variable end *****************************/
 
@@ -63,7 +67,7 @@ U8 g_ww_log_level_threshold = N_WW_LOG_LEVEL_DBG; /* allow all by default */
 
 /*************************** global function start ***************************/
 
-#ifdef CONFIG_N_LOG_MODE_ENCODE
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
 /**
  * @brief Stamp one boot record into the log stream (see n_ww_log_def.h).
  *
@@ -114,7 +118,7 @@ U16 n_ww_log_fill_boot_record(U8 *dst)
     w[3] = (U32)BUILD_GIT_ID;
     return N_WW_LOG_BOOT_RECORD_SIZE;
 }
-#endif /* CONFIG_N_LOG_MODE_ENCODE */
+#endif /* encode mode */
 
 /**
  * @brief Get current log level threshold
@@ -156,7 +160,6 @@ U32 n_ww_log_get_module_mask(void)
 void n_ww_log_set_module_mask(U32 mask)
 {
     g_ww_log_module_mask = mask;
-    // ww_printf("The module mask now is: %u", g_ww_log_module_mask);
 }
 
 /**
@@ -195,29 +198,7 @@ WW_BOOL n_ww_log_is_module_enabled(U8 module_id)
 
 void n_ww_log_init(void)
 {
-    // ww_printf("LOG: ww_log v1 init (mode: ");
-    // #if defined(CONFIG_N_LOG_MODE_ENCODE)
-    // ww_printf("ENCODE");
-    // #elif defined(CONFIG_N_LOG_MODE_STRING)
-    // ww_printf("STRING");
-    // #elif defined(CONFIG_N_LOG_MODE_DISABLE)
-    // ww_printf("DISABLED");
-    // #else
-    // ww_printf("UNKNOWN MODE");
-    // #endif
-    // ww_printf(", backends:");
-    // #if (CONFIG_N_LOG_BACKEND_UART == 1)
-    // ww_printf(" UART");
-    // #endif
-    // #if (CONFIG_N_LOG_BACKEND_RAM == 1)
-    // ww_printf(" RAM");
-    // #endif
-    // #if (CONFIG_N_LOG_BACKEND_EXT_MEM == 1)
-    // ww_printf(" STORAGE");
-    // #endif
-    // ww_printf(")\n");
-
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
+#ifdef CONFIG_N_LOG_BACKEND_RAM
     /* Create the mutex up front so the RAM ring is protected even in builds
      * without the external-storage flush task. */
     log_lock_init();
@@ -228,15 +209,15 @@ void n_ww_log_init(void)
      * recovery (see bug #8). */
     log_ram_init(WW_FALSE);
 #endif
-#if (CONFIG_N_LOG_BACKEND_EXT_MEM == 1)
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
     log_flush_task_init();
 #endif
 
-#ifdef CONFIG_N_LOG_MODE_ENCODE
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
     /* After the ring exists, before the application logs anything: everything
      * that follows in the stream belongs to this firmware build. */
     n_ww_log_write_boot_record();
-#endif
+#endif /* encode mode */
 }
 
 /*************************** global function end *****************************/

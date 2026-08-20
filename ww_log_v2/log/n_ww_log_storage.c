@@ -29,7 +29,7 @@
 #include "drivers/flash.h"
 #include "drivers/eeprom.h"
 
-/* temp */
+/* Flush-marker timestamps and debug-dump pacing. */
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -195,6 +195,16 @@ static WW_BOOL ext_scan_write_off(void)
 
     g_log_ext_ctx.write_off = off;
     g_log_ext_ctx.full = (off + 4 > end) ? WW_TRUE : WW_FALSE;
+#if CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_FREEZE
+    if (g_log_ext_ctx.full == WW_TRUE)
+    {
+        log_ram_set_ext_full();
+    }
+    else
+    {
+        log_ram_clear_ext_full();
+    }
+#endif
     return WW_TRUE;
 }
 
@@ -223,11 +233,7 @@ WW_RTN log_ext_mem_init(void)
 
     /* Step 1: Get the type of external memory */
     sys_info = reg_ww_stus_acc_sys_info_get();
-    // ww_printf(" bootMode   = %u\n", sys_info->sub.bootMode);
-    // ww_printf(" extMemType = %u\n", sys_info->sub.extMemType);
     g_log_ext_ctx.ext_mem_type = sys_info->sub.extMemType;
-
-    // ww_printf("[LOG][EXT]: ext_mem_type = %u\n", g_log_ext_ctx.ext_mem_type);
 
     if (g_log_ext_ctx.ext_mem_type == EXT_MEM_FLASH)
     {
@@ -245,12 +251,10 @@ WW_RTN log_ext_mem_init(void)
         if (g_log_ext_ctx.ext_mem_type == EXT_MEM_NONE)
         {
             /* if no ext_mem, but not fatal */
-            // ww_printf("[LOG][EXT]: No external memory\n");
             return LOG_EXT_ERR_NO_EXT_MEM;
         }
         else
         {
-            // ww_printf("[LOG][EXT]: Get external memory Error\n");
             return LOG_EXT_ERR;
         }
     }
@@ -261,32 +265,13 @@ WW_RTN log_ext_mem_init(void)
     {
         g_log_ext_ctx.log_part_valid = WW_FALSE;
         g_log_ext_ctx.initialized = WW_TRUE;
-        // ww_printf("[LOG][EXT]: Partition table is NULL\n");
         return LOG_EXT_ERR_PT_NULL;
     }
-
-    /* Todo: For debugging */
-    // ww_printf("====== Partition Table ======\n");
-    // ww_printf("magic:      0x%08X\n", pt->magic);
-    // ww_printf("version:    0x%08X\n", pt->version);
-    // ww_printf("product:    0x%08X\n", pt->product);
-    // ww_printf("ptableSize: %u\n", pt->ptableSize);
-    // ww_printf("pentryNum:  %u\n", pt->pentryNum);
-
-    // for (U16 i = 0; i < pt->pentryNum && i < 16; i++)
-    // {
-    //     PART_ENTRY_T *temp_pe = &pt->pentry[i];
-    //     ww_printf("[%u] type=%u, od=%u, slot=%u, offset=0x%08X, size=0x%08X\n",
-    //               i, temp_pe->part_type, temp_pe->part_id, temp_pe->slot_id,
-    //               temp_pe->part_offset, temp_pe->part_size);
-    // }
-    // ww_printf("=============================\n");
 
     if (pt_table_check_valid(pt) != WW_OK)
     {
         g_log_ext_ctx.log_part_valid = WW_FALSE;
         g_log_ext_ctx.initialized = WW_TRUE;
-        // ww_printf("[LOG][EXT]: Partition table invalid\n");
         return LOG_EXT_ERR_PT_INVALID;
     }
 
@@ -297,7 +282,6 @@ WW_RTN log_ext_mem_init(void)
         /* Example: 16K EEPROM bin */
         g_log_ext_ctx.log_part_valid = WW_FALSE;
         g_log_ext_ctx.initialized = WW_TRUE;
-        // ww_printf("[LOG]: Get log pt_table address failed \n");
         return LOG_EXT_ERR_NO_LOG_PART;
     }
 
@@ -306,8 +290,10 @@ WW_RTN log_ext_mem_init(void)
     g_log_ext_ctx.log_size = log_entry->part_size;
     g_log_ext_ctx.log_part_valid = WW_TRUE;
 
-    /* Step 4: The partition must hold at least the header + one max entry. */
-    if (g_log_ext_ctx.log_size < LOG_EXT_PART_HDR_SIZE + 4)
+    /* Step 4: after ERASE the largest possible staged batch must fit in one
+     * empty partition. This also covers boot/marker/max-entry requirements. */
+    if (g_log_ext_ctx.log_size <
+            LOG_EXT_PART_HDR_SIZE + LOG_EXT_FLUSH_STAGE_SIZE)
     {
         g_log_ext_ctx.log_part_valid = WW_FALSE;
         g_log_ext_ctx.initialized = WW_TRUE;
@@ -351,19 +337,24 @@ int log_ext_mem_clear(void)
     }
 
     ww_printf("[LOG][EXT]: Clearing log partition ...\n");
+    log_mutex_lock_wait();
 
     if (ext_partition_erase() != WW_OK)
     {
+        log_mutex_unlock();
         return LOG_EXT_ERR_CLEAR_FAIL;
     }
 
     /* Rewrite the header and reset the append cursor to just past it. */
     if (ext_parthdr_write() != WW_OK)
     {
+        log_mutex_unlock();
         return LOG_EXT_ERR_WRITE_FAIL;
     }
     g_log_ext_ctx.write_off = g_log_ext_ctx.log_offset + LOG_EXT_PART_HDR_SIZE;
     g_log_ext_ctx.full = WW_FALSE;
+    log_ram_clear_ext_full();
+    log_mutex_unlock();
 
     ww_printf("[LOG][EXT]: Clear done\n");
     /* No boot record needed here: the flush path stamps one ahead of the first
@@ -386,7 +377,7 @@ void log_ext_force_reinit(void)
  * @brief Flush a batch of whole entries from the RAM ring to external storage.
  *
  * Walks up to LOG_EXT_FLUSH_STAGE_SIZE RAM bytes of whole entries; entries whose
- * level passes N_WW_LOG_EXT_LEVEL_THRESHOLD are copied into a staging buffer and
+ * level passes CONFIG_N_LOG_EXT_LEVEL_THRESHOLD are copied into a staging buffer and
  * appended at write_off, the rest are just skipped. Every walked entry (persisted
  * or filtered) is consumed from the RAM ring so it does not stall the cursor.
  *
@@ -405,12 +396,16 @@ void log_ext_force_reinit(void)
  */
 int log_ram_flush(void)
 {
-    static U8 stage[LOG_EXT_FLUSH_STAGE_SIZE];
+    /* A U32 backing array guarantees the alignment required by the encoded
+     * stream's word accesses; header checks guarantee exact sizing. */
+    static U32 stage_words[LOG_EXT_FLUSH_STAGE_SIZE / sizeof(U32)];
+    U8 *stage = (U8 *)stage_words;
     U16 packed, consumed;
     U16 lead = 0;                 /* control-record bytes ahead of `packed` */
     U16 boot_lead = 0;            /* boot record, when the archive is empty   */
-    U16 total;                    /* lead + packed: what actually hits the device */
+    U16 total;                    /* control records + packed device bytes */
     U32 dst_off = 0, end, avail;
+    int archive_empty;
     int need_erase = 0;
     int ret;
 
@@ -427,24 +422,41 @@ int log_ram_flush(void)
         return LOG_EXT_OK;
     }
 
+#if CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_FREEZE
     if (g_log_ext_ctx.full == WW_TRUE)
     {
         log_mutex_unlock();
         return LOG_EXT_ERR_PT_FULL;   /* FREEZE: archive frozen, keep earliest */
     }
+#endif
 
-#ifdef CONFIG_N_LOG_MODE_ENCODE
+#if CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE
+    archive_empty = (g_log_ext_ctx.write_off ==
+                     g_log_ext_ctx.log_offset + LOG_EXT_PART_HDR_SIZE);
+
     /* An archive holding entries but no boot record cannot be attributed to a
      * map, so stamp one ahead of the first batch a fresh archive receives.
      * Doing it here rather than at init/clear time makes it an invariant of the
      * writer: whatever emptied the archive, and whatever happened to the RAM
      * ring afterwards, the first entries to land carry their identity. */
-    if (g_log_ext_ctx.write_off ==
-            g_log_ext_ctx.log_offset + LOG_EXT_PART_HDR_SIZE)
+    if (archive_empty)
     {
         boot_lead = N_WW_LOG_BOOT_RECORD_SIZE;
         lead = boot_lead;
     }
+#if CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_ERASE
+    else
+    {
+        /* Reserve space without committing it yet. If this batch fits, the
+         * marker/data are shifted down before append. If it crosses the end,
+         * the reserved record becomes the first record after erase, preserving
+         * the map identity of the restarted archive. */
+        boot_lead = N_WW_LOG_BOOT_RECORD_SIZE;
+        lead = boot_lead;
+    }
+#endif
+#else
+    archive_empty = 0;
 #endif
 
 #ifdef CONFIG_N_LOG_EXT_FLUSH_MARKER
@@ -460,7 +472,8 @@ int log_ram_flush(void)
     /* Walk one staging buffer worth of whole entries, level-filtering into
      * `stage` (after any reserved marker); `consumed` counts every entry walked
      * so the RAM cursor advances past the filtered-out ones too. */
-    packed = log_ram_pack_ext(stage + lead, LOG_EXT_FLUSH_STAGE_SIZE - lead,
+    packed = log_ram_pack_ext(stage + lead,
+                              LOG_EXT_FLUSH_STAGE_SIZE - lead,
                               &consumed);
     if (consumed == 0)
     {
@@ -475,8 +488,8 @@ int log_ram_flush(void)
     }
     else
     {
-#ifdef CONFIG_N_LOG_MODE_ENCODE
-        if (boot_lead != 0)
+#if CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE
+        if (archive_empty && boot_lead != 0)
         {
             (void)n_ww_log_fill_boot_record(stage);
         }
@@ -497,9 +510,37 @@ int log_ram_flush(void)
     end   = g_log_ext_ctx.log_offset + g_log_ext_ctx.log_size;
     avail = (g_log_ext_ctx.write_off < end) ? (end - g_log_ext_ctx.write_off) : 0;
 
+#if (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE) && \
+    (CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_ERASE)
+    if (packed > 0 && !archive_empty && boot_lead != 0)
+    {
+        U16 normal_total = total - boot_lead;
+
+        if (normal_total <= avail)
+        {
+            /* The batch fits without an erase, so discard the provisional boot
+             * reservation. Source is above destination; forward word copies
+             * are overlap-safe and every record is 4-byte aligned. */
+            U16 i;
+            for (i = 0; i < normal_total; i += 4)
+            {
+                *(U32 *)(stage + i) = *(U32 *)(stage + boot_lead + i);
+            }
+            total = normal_total;
+            lead -= boot_lead;
+            boot_lead = 0;
+        }
+        else
+        {
+            /* This batch starts a new archive after the erase below. */
+            (void)n_ww_log_fill_boot_record(stage);
+        }
+    }
+#endif
+
     if (total > avail)
     {
-#ifdef CONFIG_N_LOG_EXT_FULL_FREEZE
+#if CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_FREEZE
         /* Freeze: this is the last batch the partition will take. Fill the tail
          * with as many WHOLE entries as still fit instead of discarding the
          * batch wholesale -- dropping it would strand up to one staging buffer
@@ -526,6 +567,7 @@ int log_ram_flush(void)
         need_erase = 1;
         dst_off = g_log_ext_ctx.log_offset + LOG_EXT_PART_HDR_SIZE;
         g_log_ext_ctx.write_off = dst_off + total;
+        g_log_ext_ctx.full = WW_FALSE;
 #endif
     }
     else
@@ -541,8 +583,14 @@ int log_ram_flush(void)
      * so the reserved region cannot be raced). */
     if (need_erase)
     {
-        (void)ext_partition_erase();
-        (void)ext_parthdr_write();
+        if (ext_partition_erase() != WW_OK)
+        {
+            return LOG_EXT_ERR_CLEAR_FAIL;
+        }
+        if (ext_parthdr_write() != WW_OK)
+        {
+            return LOG_EXT_ERR_WRITE_FAIL;
+        }
     }
     if (total == 0)
     {
@@ -594,7 +642,7 @@ WW_BOOL log_ext_mem_is_full(void)
     /* FREEZE: full once the append stream reached the partition end -> stop
      * flushing to preserve the earliest logs.
      * ERASE: never full -- the partition is wiped and reused on overflow. */
-#ifdef CONFIG_N_LOG_EXT_FULL_FREEZE
+#if CONFIG_N_LOG_EXT_FULL == N_WW_LOG_EXT_FULL_FREEZE
     return g_log_ext_ctx.full ? WW_TRUE : WW_FALSE;
 #else
     return WW_FALSE;
@@ -666,12 +714,9 @@ void log_ext_mem_dump(void)
     U32 offset = 0;
 
     ww_printf("\n========= External Memory LOG Dump =========\n");
-    // ww_printf("Used: %u bytes\n",
-    //           g_log_ext_ctx.write_off, g_log_ext_ctx.log_size);
     ww_printf("Log part offset is 0x%X\n", g_log_ext_ctx.log_offset);
     ww_printf("Log offset is 0x%X\n", g_log_ext_ctx.log_offset + offset);
 
-    // while (offset < g_log_ext_ctx.log_size)
     while (offset < 0x100)
     {
         U32 chunk = 16;

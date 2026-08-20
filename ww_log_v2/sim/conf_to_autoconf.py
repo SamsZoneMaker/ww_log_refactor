@@ -16,15 +16,11 @@ Kconfig's conversion rules, reproduced:
     CONFIG_X="text"         ->  #define CONFIG_X "text"
 
 Omitting a disabled symbol rather than defining it to 0 is the part that
-matters: the log core tests these both ways (`#ifdef CONFIG_N_LOG_BACKEND_RAM`
-in one file, `#if (CONFIG_N_LOG_BACKEND_RAM == 1)` in another), and a 0 would
-satisfy the second while defeating the first.
+matters: the log core uses `#ifdef CONFIG_N_LOG_BACKEND_*`, matching the
+firmware Kconfig convention.
 
-Two sanity checks that menuconfig would otherwise give us for free, since a
-.conf here is hand-edited:
-  * exactly one N_LOG_MODE_* selected -- zero of them silently falls through to
-    DISABLED in n_ww_log_macro.h, i.e. firmware that ships mute;
-  * EXT_MEM implies RAM -- the external backend drains the RAM ring.
+The validator mirrors the important Kconfig dependencies and numeric ranges
+because this .conf is hand-edited rather than produced by menuconfig.
 
 Usage:
     conf_to_autoconf.py <in.conf> [--write <out.h>]
@@ -34,9 +30,27 @@ import os
 import re
 import sys
 
-MODE_SYMBOLS = ("CONFIG_N_LOG_MODE_STRING",
-                "CONFIG_N_LOG_MODE_ENCODE",
-                "CONFIG_N_LOG_MODE_DISABLE")
+OBSOLETE_CHOICE_SYMBOLS = (
+    "CONFIG_N_LOG_MODE_STRING",
+    "CONFIG_N_LOG_MODE_ENCODE",
+    "CONFIG_N_LOG_MODE_DISABLE",
+    *("CONFIG_N_LOG_COMPILE_THRESHOLD_" + x
+      for x in ("ERR", "WRN", "INF", "DBG")),
+    *("CONFIG_N_LOG_RUNTIME_LEVEL_" + x
+      for x in ("ERR", "WRN", "INF", "DBG")),
+    *("CONFIG_N_LOG_EXT_LEVEL_THRESHOLD_" + x
+      for x in ("ERR", "WRN", "INF", "DBG")),
+    "CONFIG_N_LOG_EXT_FULL_FREEZE",
+    "CONFIG_N_LOG_EXT_FULL_ERASE",
+)
+
+REMOVED_TUNING_SYMBOLS = (
+    "CONFIG_N_LOG_RAM_FLUSH_THRESHOLD",
+    "CONFIG_N_LOG_EXT_FLUSH_STAGE_SIZE",
+    "CONFIG_N_LOG_WRITE_TIMEOUT_MS",
+    "CONFIG_N_LOG_FLUSH_TASK_STACK_SIZE",
+    "CONFIG_N_LOG_FLUSH_TASK_PRIORITY",
+)
 
 LINE_RE = re.compile(r'^\s*(CONFIG_[A-Za-z0-9_]+)\s*=\s*(.+?)\s*$')
 NOT_SET_RE = re.compile(r'^\s*#\s*(CONFIG_[A-Za-z0-9_]+)\s+is not set\s*$')
@@ -68,18 +82,90 @@ def parse_conf(path):
 
 
 def validate(symbols):
-    names = {s for s, _ in symbols}
+    values = {}
+    for name, value in symbols:
+        if name in values:
+            sys.exit("Error: duplicate setting for %s" % name)
+        values[name] = value
+    names = set(values)
 
-    modes = [s for s in MODE_SYMBOLS if s in names]
-    if len(modes) != 1:
-        sys.exit("Error: exactly one of %s must be set, found %s"
-                 % ('/'.join(MODE_SYMBOLS), modes or 'none'))
+    def integer(name, low, high, multiple=None):
+        if name not in values:
+            sys.exit("Error: %s is required by the selected backends" % name)
+        try:
+            value = int(str(values[name]), 0)
+        except ValueError:
+            sys.exit("Error: %s must be an integer, got %r"
+                     % (name, values[name]))
+        if value < low or value > high:
+            sys.exit("Error: %s must be in [%d, %d], got %d"
+                     % (name, low, high, value))
+        if multiple and value % multiple:
+            sys.exit("Error: %s must be a multiple of %d, got %d"
+                     % (name, multiple, value))
+        return value
 
-    if ("CONFIG_N_LOG_BACKEND_EXT_MEM" in names
-            and "CONFIG_N_LOG_BACKEND_RAM" not in names):
+    def boolean(name):
+        if name in values and values[name] is not True:
+            sys.exit("Error: %s is boolean and must be y or n, got %r"
+                     % (name, values[name]))
+
+    def forbid(group, reason):
+        selected = sorted(s for s in group if s in names)
+        if selected:
+            sys.exit("Error: %s cannot be set %s"
+                     % (', '.join(selected), reason))
+
+    forbid(OBSOLETE_CHOICE_SYMBOLS,
+           "after the numeric-enum configuration migration")
+    forbid(REMOVED_TUNING_SYMBOLS,
+           "because this tuning is owned by the functional headers")
+
+    for name in ("CONFIG_N_LOG",
+                 "CONFIG_N_LOG_BACKEND_UART",
+                 "CONFIG_N_LOG_BACKEND_RAM",
+                 "CONFIG_N_LOG_BACKEND_EXT_MEM",
+                 "CONFIG_N_LOG_EXT_FLUSH_MARKER"):
+        boolean(name)
+
+    if "CONFIG_N_LOG" not in names:
+        stray = sorted(s for s in names if s.startswith("CONFIG_N_LOG_"))
+        if stray:
+            sys.exit("Error: CONFIG_N_LOG is disabled but log options are set: %s"
+                     % ', '.join(stray))
+        return
+
+    mode = integer("CONFIG_N_LOG_MODE", 1, 3)
+    active = mode != 3
+    if active:
+        integer("CONFIG_N_LOG_COMPILE_THRESHOLD", 0, 3)
+        integer("CONFIG_N_LOG_RUNTIME_THRESHOLD", 0, 3)
+    else:
+        forbid(("CONFIG_N_LOG_COMPILE_THRESHOLD",
+                "CONFIG_N_LOG_RUNTIME_THRESHOLD"),
+               "in N_LOG_MODE_DISABLE")
+
+    uart = "CONFIG_N_LOG_BACKEND_UART" in names
+    ram = "CONFIG_N_LOG_BACKEND_RAM" in names
+    ext = "CONFIG_N_LOG_BACKEND_EXT_MEM" in names
+    if not active and (uart or ram or ext):
+        sys.exit("Error: backends cannot be selected in N_LOG_MODE_DISABLE")
+    if mode != 2 and (ram or ext):
+        sys.exit("Error: RAM and EXT_MEM backends require CONFIG_N_LOG_MODE=2")
+    if ext and not ram:
         sys.exit("Error: CONFIG_N_LOG_BACKEND_EXT_MEM requires "
-                 "CONFIG_N_LOG_BACKEND_RAM (the external backend has no "
-                 "storage of its own; it drains the RAM ring)")
+                 "CONFIG_N_LOG_BACKEND_RAM (it drains the RAM ring)")
+
+    if ext:
+        integer("CONFIG_N_LOG_EXT_LEVEL_THRESHOLD", 0, 3)
+        integer("CONFIG_N_LOG_EXT_FULL", 1, 2)
+        integer("CONFIG_N_LOG_FLUSH_TIMEOUT_MS", 1, 86400000)
+    else:
+        forbid(("CONFIG_N_LOG_EXT_LEVEL_THRESHOLD",
+                "CONFIG_N_LOG_EXT_FULL",
+                "CONFIG_N_LOG_EXT_FLUSH_MARKER",
+                "CONFIG_N_LOG_FLUSH_TIMEOUT_MS"),
+               "without the EXT_MEM backend")
 
 
 def render(symbols, src):

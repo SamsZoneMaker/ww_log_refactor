@@ -26,22 +26,61 @@ extern "C"
 #define N_WW_LOG_LEVEL_INF    2  /* Info: important state changes */
 #define N_WW_LOG_LEVEL_DBG    3  /* Debug: detailed execution flow */
 
-/**
- * Compile-time level threshold. Logs with level > threshold are compiled out
- * entirely (zero code size). Override via -DN_WW_LOG_COMPILE_THRESHOLD=n.
- */
-/* Sources, in precedence order: an explicit -D, the firmware's Kconfig choice,
- * then the default. The sim's generated log_autoconf.h defines the first form
- * directly; a Kconfig build selects one of the CONFIG_* bools instead. */
-#ifndef N_WW_LOG_COMPILE_THRESHOLD
-#  if   defined(CONFIG_N_LOG_COMPILE_THRESHOLD_ERR)
-#    define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_ERR
-#  elif defined(CONFIG_N_LOG_COMPILE_THRESHOLD_WRN)
-#    define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_WRN
-#  elif defined(CONFIG_N_LOG_COMPILE_THRESHOLD_INF)
-#    define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_INF
-#  else
-#    define N_WW_LOG_COMPILE_THRESHOLD    N_WW_LOG_LEVEL_DBG
+/* Numeric Kconfig values. They are deliberately public constants so C can use
+ * CONFIG_N_LOG_* directly without a second set of generated choice symbols.
+ * Keep these values stable: the level numbers are also part of the encoded-log
+ * wire format. */
+#define N_WW_LOG_MODE_STRING          1
+#define N_WW_LOG_MODE_ENCODE          2
+#define N_WW_LOG_MODE_DISABLE         3
+
+#define N_WW_LOG_EXT_FULL_FREEZE      1
+#define N_WW_LOG_EXT_FULL_ERASE       2
+
+/* Fail early when a hand-written .conf or an incomplete target integration
+ * bypasses Kconfig's range/dependency checking. */
+#ifdef CONFIG_N_LOG
+#  ifndef CONFIG_N_LOG_MODE
+#    error "CONFIG_N_LOG_MODE is required when CONFIG_N_LOG is enabled"
+#  endif
+#  if (CONFIG_N_LOG_MODE < N_WW_LOG_MODE_STRING) || \
+      (CONFIG_N_LOG_MODE > N_WW_LOG_MODE_DISABLE)
+#    error "CONFIG_N_LOG_MODE must be string=1, encode=2, or disable=3"
+#  endif
+
+#  if CONFIG_N_LOG_MODE != N_WW_LOG_MODE_DISABLE
+#    ifndef CONFIG_N_LOG_COMPILE_THRESHOLD
+#      error "CONFIG_N_LOG_COMPILE_THRESHOLD is required"
+#    endif
+#    ifndef CONFIG_N_LOG_RUNTIME_THRESHOLD
+#      error "CONFIG_N_LOG_RUNTIME_THRESHOLD is required"
+#    endif
+#    if (CONFIG_N_LOG_COMPILE_THRESHOLD < N_WW_LOG_LEVEL_ERR) || \
+        (CONFIG_N_LOG_COMPILE_THRESHOLD > N_WW_LOG_LEVEL_DBG)
+#      error "CONFIG_N_LOG_COMPILE_THRESHOLD must be ERR=0..DBG=3"
+#    endif
+#    if (CONFIG_N_LOG_RUNTIME_THRESHOLD < N_WW_LOG_LEVEL_ERR) || \
+        (CONFIG_N_LOG_RUNTIME_THRESHOLD > N_WW_LOG_LEVEL_DBG)
+#      error "CONFIG_N_LOG_RUNTIME_THRESHOLD must be ERR=0..DBG=3"
+#    endif
+#  endif
+
+#  if (defined(CONFIG_N_LOG_BACKEND_RAM) || \
+       defined(CONFIG_N_LOG_BACKEND_EXT_MEM)) && \
+      (CONFIG_N_LOG_MODE != N_WW_LOG_MODE_ENCODE)
+#    error "RAM and EXT_MEM backends require CONFIG_N_LOG_MODE=2 (encode)"
+#  endif
+#  if (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_DISABLE) && \
+      (defined(CONFIG_N_LOG_BACKEND_UART) || \
+       defined(CONFIG_N_LOG_BACKEND_RAM) || \
+       defined(CONFIG_N_LOG_BACKEND_EXT_MEM))
+#    error "no backend may be enabled when CONFIG_N_LOG_MODE=3 (disable)"
+#  endif
+#else
+#  if defined(CONFIG_N_LOG_BACKEND_UART) || \
+      defined(CONFIG_N_LOG_BACKEND_RAM) || \
+      defined(CONFIG_N_LOG_BACKEND_EXT_MEM)
+#    error "log backends require CONFIG_N_LOG"
 #  endif
 #endif
 
@@ -51,18 +90,26 @@ extern "C"
  * copied on to external storage when the ring is flushed. level IS encoded into
  * the entry header (see below), so this filter is applied in the flush path by
  * reading the level back out of each entry -- RAM keeps all, ext keeps a subset.
- *   = N_WW_LOG_LEVEL_WRN : persist only ERR/WRN to ext (default)
+ *   = N_WW_LOG_LEVEL_WRN : persist only ERR/WRN to ext
  *   = N_WW_LOG_LEVEL_DBG : persist everything to ext
  */
-#ifndef N_WW_LOG_EXT_LEVEL_THRESHOLD
-#  if   defined(CONFIG_N_LOG_EXT_LEVEL_THRESHOLD_ERR)
-#    define N_WW_LOG_EXT_LEVEL_THRESHOLD  N_WW_LOG_LEVEL_ERR
-#  elif defined(CONFIG_N_LOG_EXT_LEVEL_THRESHOLD_INF)
-#    define N_WW_LOG_EXT_LEVEL_THRESHOLD  N_WW_LOG_LEVEL_INF
-#  elif defined(CONFIG_N_LOG_EXT_LEVEL_THRESHOLD_DBG)
-#    define N_WW_LOG_EXT_LEVEL_THRESHOLD  N_WW_LOG_LEVEL_DBG
-#  else
-#    define N_WW_LOG_EXT_LEVEL_THRESHOLD  N_WW_LOG_LEVEL_WRN
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
+#  ifndef CONFIG_N_LOG_BACKEND_RAM
+#    error "CONFIG_N_LOG_BACKEND_EXT_MEM requires CONFIG_N_LOG_BACKEND_RAM"
+#  endif
+#  ifndef CONFIG_N_LOG_EXT_LEVEL_THRESHOLD
+#    error "CONFIG_N_LOG_EXT_LEVEL_THRESHOLD is required by EXT_MEM"
+#  endif
+#  if (CONFIG_N_LOG_EXT_LEVEL_THRESHOLD < N_WW_LOG_LEVEL_ERR) || \
+      (CONFIG_N_LOG_EXT_LEVEL_THRESHOLD > N_WW_LOG_LEVEL_DBG)
+#    error "CONFIG_N_LOG_EXT_LEVEL_THRESHOLD must be ERR=0..DBG=3"
+#  endif
+#  ifndef CONFIG_N_LOG_EXT_FULL
+#    error "CONFIG_N_LOG_EXT_FULL is required by EXT_MEM"
+#  endif
+#  if (CONFIG_N_LOG_EXT_FULL < N_WW_LOG_EXT_FULL_FREEZE) || \
+      (CONFIG_N_LOG_EXT_FULL > N_WW_LOG_EXT_FULL_ERASE)
+#    error "CONFIG_N_LOG_EXT_FULL must be freeze=1 or erase=2"
 #  endif
 #endif
 
@@ -92,7 +139,7 @@ extern "C"
  *                       file_id = [ module_id : 5 ][ offset : 7 ]
  *
  * level (2 bits) is encoded so the flush path can decide, per entry, whether to
- * copy it to external storage (see N_WW_LOG_EXT_LEVEL_THRESHOLD) without a side
+ * copy it to external storage (see CONFIG_N_LOG_EXT_LEVEL_THRESHOLD) without a side
  * table. That cost 2 bits from param_count: max params is now 15 (was 16).
  *
  * The pack macro and the accessors are mode-independent: the storage layer

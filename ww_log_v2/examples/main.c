@@ -15,10 +15,10 @@
 #include "log/n_ww_log.h"
 #include <stdio.h>
 
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
+#ifdef CONFIG_N_LOG_BACKEND_RAM
 #include "log/n_ww_log_storage.h"
 #endif
-#if (CONFIG_N_LOG_BACKEND_EXT_MEM == 1)
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 #include "sim_ext_storage.h"
 #endif
 
@@ -47,21 +47,25 @@ int main(void)
     printf("  ww_log v2 Simulation\n");
     printf("=======================================\n");
 
-#if defined(CONFIG_N_LOG_MODE_DISABLE)
+#if !defined(CONFIG_N_LOG) || (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_DISABLE)
     printf("  Mode: DISABLED\n");
-#elif defined(CONFIG_N_LOG_MODE_STRING)
+#elif CONFIG_N_LOG_MODE == N_WW_LOG_MODE_STRING
     printf("  Mode: STRING\n");
-#elif defined(CONFIG_N_LOG_MODE_ENCODE)
+#elif CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE
     printf("  Mode: ENCODE\n");
 #else
     printf("  Mode: (unknown - check autoconf.h)\n");
 #endif
 
-#if (CONFIG_N_LOG_BACKEND_UART == 1)
-    printf("  Backend: UART");
+    printf("  Backend:");
+#ifdef CONFIG_N_LOG_BACKEND_UART
+    printf(" UART");
 #endif
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
+#ifdef CONFIG_N_LOG_BACKEND_RAM
     printf(" RAM");
+#endif
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
+    printf(" EXT_MEM");
 #endif
     printf("\n  Level threshold: %u (runtime configurable)\n",
            n_ww_log_get_level_threshold());
@@ -95,19 +99,20 @@ int main(void)
 
     /* ===== Dynamic switch: raise level threshold to ERR only ===== */
     banner("Dynamic switch: level threshold = ERR");
+    U8 previous_level = n_ww_log_get_level_threshold();
     n_ww_log_set_level_threshold(N_WW_LOG_LEVEL_ERR);
     printf("-- only ERR lines should appear below --\n");
     demo_process(-1);    /* triggers LOG_ERR + early return */
     drv_uart_send(512);  /* WRN/INF/DBG suppressed, none are ERR */
-    n_ww_log_set_level_threshold(N_WW_LOG_LEVEL_DBG);
+    n_ww_log_set_level_threshold(previous_level);
 
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
+#ifdef CONFIG_N_LOG_BACKEND_RAM
     banner("RAM backend status");
     printf("Write index : %u bytes\n", log_ram_get_write_index());
     printf("Available   : %u bytes\n", log_ram_get_available());
 #endif
 
-#if (CONFIG_N_LOG_BACKEND_EXT_MEM == 1)
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
     /* ===== External-storage append-log flush test (encode mode) ===== */
     banner("EXT storage: append-log flush");
     log_ext_mem_available();   /* trigger lazy ext init so geometry is known */
@@ -147,7 +152,7 @@ int main(void)
     printf("Ext LOG partition dumped -> ext_dump.bin (decode with log_decoder.py)\n");
 #endif
 
-#if (CONFIG_N_LOG_BACKEND_RAM == 1)
+#ifdef CONFIG_N_LOG_BACKEND_RAM
     log_ram_dump_hex();
 #endif
 

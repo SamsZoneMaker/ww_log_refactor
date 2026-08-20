@@ -17,24 +17,12 @@ extern "C"
 #include <stdbool.h>
 #include "dlm_layout.h"
 #include "n_ww_log_def.h"    /* encode layout + control-record namespace */
-#include "n_ww_log_task.h"
 
 /*************************** macro definition start ***************************/
 
 /* RAM buffer layout */
 #define LOG_RAM_HEADER_SIZE       sizeof(LOG_RAM_HEADER_T)  /* Header size in bytes */
 #define LOG_RAM_DATA_SIZE         (DLM_MAINTAIN_LOG_SIZE - LOG_RAM_HEADER_SIZE)
-/* Tuning knobs, in precedence order: an explicit -D or the sim's generated
- * log_autoconf.h (both define the bare name), then the firmware's Kconfig
- * symbol, then the default here. */
-#ifndef LOG_RAM_FLUSH_THRESHOLD
-#  ifdef CONFIG_N_LOG_RAM_FLUSH_THRESHOLD
-#    define LOG_RAM_FLUSH_THRESHOLD   (CONFIG_N_LOG_RAM_FLUSH_THRESHOLD)
-#  else
-#    define LOG_RAM_FLUSH_THRESHOLD   (480)  /* ~one ext block payload */
-#  endif
-#endif
-
 #define LOG_RAM_MAGIC             (0x574C4F47)
 
 #define LOG_FLAG_OVERFLOW         (1 << 0)
@@ -57,14 +45,6 @@ extern "C"
 
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 
-/* The external backend has no storage of its own: it drains the RAM ring
- * (log_ram_pack_ext / log_ram_consume) under the ring's mutex. Selecting it
- * without the RAM backend used to fail at link time with a bare "undefined
- * reference to log_mutex_lock"; say so here instead. */
-#ifndef CONFIG_N_LOG_BACKEND_RAM
-#error "CONFIG_N_LOG_BACKEND_EXT_MEM requires CONFIG_N_LOG_BACKEND_RAM"
-#endif
-
 /* ================= External-storage container geometry (log-structured) =========
  *
  * The LOG partition is an append-only entry stream, NOT a fixed-slot ring:
@@ -76,7 +56,7 @@ extern "C"
  *                                 pcnt*4B params), exactly the RAM-ring wire form.
  *   [write_off .. log_offset+log_size) : erased tail (0xFF).
  *
- * A flush copies whole entries whose level passes N_WW_LOG_EXT_LEVEL_THRESHOLD
+ * A flush copies whole entries whose level passes CONFIG_N_LOG_EXT_LEVEL_THRESHOLD
  * from the RAM ring and appends them at write_off. No per-block header, no CRC,
  * no footer: the stream is self-describing (each entry's pcnt gives its length)
  * and the first 0xFFFFFFFF word marks the end.
@@ -98,21 +78,16 @@ extern "C"
 /* Per-flush staging buffer: bounds both the RAM bytes scanned per log_ram_flush()
  * call and the static append buffer. The flush task re-arms while data remains,
  * so a backlog drains over successive calls. Must exceed one max entry (64B). */
-#ifndef LOG_EXT_FLUSH_STAGE_SIZE
-#  ifdef CONFIG_N_LOG_EXT_FLUSH_STAGE_SIZE
-#    define LOG_EXT_FLUSH_STAGE_SIZE  (CONFIG_N_LOG_EXT_FLUSH_STAGE_SIZE)
-#  else
-#    define LOG_EXT_FLUSH_STAGE_SIZE  (256)
-#  endif
+#define LOG_EXT_FLUSH_STAGE_SIZE  256
+#if (LOG_EXT_FLUSH_STAGE_SIZE < 88) || \
+    (LOG_EXT_FLUSH_STAGE_SIZE > 65532) || \
+    ((LOG_EXT_FLUSH_STAGE_SIZE % 4) != 0)
+#error "LOG_EXT_FLUSH_STAGE_SIZE must be a 4-byte multiple in [88, 65532]"
 #endif
 
 /* Ext-full policy: FREEZE stops flushing (preserves the earliest logs); ERASE
  * wipes the partition and restarts (preserves the newest). log-structured has no
- * per-slot rolling window, so it is one or the other. Exactly one must be
- * defined (default FREEZE, overridable in autoconf.h). */
-#if !defined(CONFIG_N_LOG_EXT_FULL_FREEZE) && !defined(CONFIG_N_LOG_EXT_FULL_ERASE)
-#define CONFIG_N_LOG_EXT_FULL_FREEZE
-#endif
+ * per-slot rolling window, so it is one or the other. */
 
 /* Flush-batch marker (enable with CONFIG_N_LOG_EXT_FLUSH_MARKER in autoconf.h).
  * An 8-byte record [LOG_EXT_FLUSH_MARKER_HDR][U32 tick] is prepended to the first
@@ -168,8 +143,18 @@ typedef struct
     LOG_RAM_HEADER_T *header; /*==< Pointer to header */
     U8  *data;                /*==< Pointer to data area */
     U16 data_size;            /*==< Data area size (4064 bytes) */
-    U16 threshold;           /*==< Flush threshold (LOG_RAM_FLUSH_THRESHOLD = 480 bytes) */
+    U16 threshold;           /*==< Pending bytes that trigger an ext flush */
 } LOG_RAM_BUFFER_T;
+
+#ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
+#define LOG_RAM_FLUSH_THRESHOLD  480
+#if ((LOG_RAM_FLUSH_THRESHOLD % 4) != 0)
+#error "LOG_RAM_FLUSH_THRESHOLD must be a multiple of four"
+#endif
+typedef char N_WW_LOG_RAM_FLUSH_THRESHOLD_must_fit_ring[
+    (LOG_RAM_FLUSH_THRESHOLD > 0 &&
+     LOG_RAM_FLUSH_THRESHOLD < LOG_RAM_DATA_SIZE) ? 1 : -1];
+#endif
 
 /* Err Code definition */
 typedef enum
@@ -229,10 +214,10 @@ typedef struct
 void log_ram_init(bool force_clear);
 void log_ram_get_header_info(LOG_RAM_HEADER_T *info);
 U32  log_calc_checksum(const void *data, U32 len);
-WW_RTN log_ram_write(U32 encoded, U32 *params, U8 param_count);
-void log_ram_mark_error(void);
+WW_RTN log_ram_write(U32 encoded, const U32 *params, U8 param_count);
 #ifdef CONFIG_N_LOG_BACKEND_EXT_MEM
 void log_ram_set_ext_full(void);   /* FREEZE: archive filled up */
+void log_ram_clear_ext_full(void); /* archive cleared/reusable */
 #endif
 WW_RTN log_ram_validate_data(void);
 void log_ram_dump_hex(void);

@@ -1,9 +1,9 @@
 {
   "meta": {
     "version": "",
-    "build_time": "2026-08-19T16:38:24Z",
+    "build_time": "2026-08-20T03:14:38Z",
     "encoding": "file12_line14_lvl2_pcnt4",
-    "map_id": "0x2BE96400"
+    "map_id": "0x1E24A8B1"
   },
   "modules": {
     "1": {
@@ -102,61 +102,61 @@
     },
     {
       "file_id": 256,
-      "line": 170,
+      "line": 181,
       "level": "ERR",
       "fmt": "selftest err %d"
     },
     {
       "file_id": 256,
-      "line": 171,
+      "line": 182,
       "level": "WRN",
       "fmt": "selftest wrn %d"
     },
     {
       "file_id": 256,
-      "line": 172,
+      "line": 183,
       "level": "INF",
       "fmt": "selftest inf %d"
     },
     {
       "file_id": 256,
-      "line": 173,
+      "line": 184,
       "level": "DBG",
       "fmt": "selftest dbg %d"
     },
     {
       "file_id": 256,
-      "line": 190,
-      "level": "INF",
+      "line": 201,
+      "level": "ERR",
       "fmt": "masked %d"
     },
     {
       "file_id": 256,
-      "line": 193,
-      "level": "INF",
+      "line": 204,
+      "level": "ERR",
       "fmt": "unmasked %d"
     },
     {
       "file_id": 256,
-      "line": 203,
+      "line": 214,
       "level": "INF",
       "fmt": "inf %d"
     },
     {
       "file_id": 256,
-      "line": 204,
+      "line": 215,
       "level": "WRN",
       "fmt": "wrn %d"
     },
     {
       "file_id": 256,
-      "line": 205,
+      "line": 216,
       "level": "DBG",
       "fmt": "dbg %d"
     },
     {
       "file_id": 256,
-      "line": 207,
+      "line": 218,
       "level": "ERR",
       "fmt": "err %d"
     },

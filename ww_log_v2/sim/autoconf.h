@@ -17,6 +17,6 @@
 #ifndef __AUTOCONF_H__
 #define __AUTOCONF_H__
 
-#include "log_autoconf.h"   /* generated -- edit scripts/log/log_config.json */
+#include "log_autoconf.h"   /* generated -- edit sim/log.conf */
 
 #endif /* __AUTOCONF_H__ */

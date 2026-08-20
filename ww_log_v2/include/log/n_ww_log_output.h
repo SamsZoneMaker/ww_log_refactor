@@ -18,13 +18,13 @@ extern "C"
 
 /*************************** declaration start ***************************/
 
-#if defined(CONFIG_N_LOG_MODE_STRING)
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_STRING)
 /* String mode: format + print directly (filename/line/level + fmt). */
 void n_ww_log_str_output(U8 module_id, const char *filename, U32 line, U8 level,
                          const char *fmt, ...);
 #endif
 
-#if defined(CONFIG_N_LOG_MODE_ENCODE)
+#if defined(CONFIG_N_LOG) && (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
 /* Encode mode: pack the entry header + U32 params and hand to the backends. */
 void n_ww_log_encode_output(U16 file_id, U16 line, U8 level, U8 param_count, ...);
 #endif

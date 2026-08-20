@@ -398,6 +398,10 @@ def render_frames(frames, maps, default_id, raw=False):
                              "(%s) =====" % (map_id, version, git_id,
                                              os.path.basename(maps[map_id][1])))
             else:
+                # Do not keep using the PREVIOUS boot's trusted map. If the
+                # requested map is missing, fall back explicitly to the CLI's
+                # default map and mark every line as guessed.
+                cur_idx = maps[default_id][0] if default_id in maps else None
                 trusted = False
                 lines.append("===== boot: map 0x%08X  version 0x%08X  git 0x%08X "
                              "=====" % (map_id, version, git_id))

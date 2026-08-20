@@ -50,7 +50,7 @@ INCLUDES = \
     -Isrc/test
 
 # Force-include autoconf.h on every TU, the way the Kconfig build does on target
-# (CONFIG_N_LOG_MODE_* / CONFIG_N_LOG_BACKEND_* come from there). This lets the
+# (CONFIG_N_LOG_MODE / CONFIG_N_LOG_BACKEND_* come from there). This lets the
 # real firmware .c files compile unmodified -- they don't #include autoconf.h.
 BASE_CFLAGS = -Wall -Wextra $(INCLUDES) -g -O2 \
               -DSIMULATION_MODE \
@@ -93,28 +93,31 @@ ALL_SRCS = $(LOG_MODULE_SRCS) $(SIM_IMPL_SRCS) $(LOG_SRCS) examples/main.c
 OBJS = $(ALL_SRCS:%.c=$(OUT_DIR)/%.o)
 
 # ---- Map + derived artifacts -----------------------------------------------
-# Rebuild scope matters here. Editing a source file moves LINE NUMBERS (which
-# only the decoder cares about, via ww_log_map.json) but not FILE IDS (which
-# are injected with -D and so do affect every object). Those two must not share
-# one timestamp, or every keystroke costs a full rebuild:
+# Rebuild scope matters here. Editing a source can move log line numbers (map +
+# map_id change) without changing FILE IDS (the per-file -D values). Those
+# outputs must not share one timestamp, or every edit costs a full rebuild:
 #
 #   file_ids.mk   regenerated on every scan, always touched -> safe to -include
 #                 (a target that keeps an older mtime than its prerequisite
 #                 makes GNU make restart forever). NOTHING compiles against it.
 #   auto_file_ids.h  written ONLY when its content changed, i.e. only when a
 #                 file was added/removed or a module ID moved. This is what the
-#                 objects depend on, so an ordinary source edit rebuilds just
-#                 that one object.
+#                 objects depend on. A non-log edit rebuilds just its object; a
+#                 map-changing edit also rebuilds the two map_id consumers.
 $(FILE_IDS_MK): $(LOG_CONFIG) $(GEN) $(LOG_CONF) $(CONF2AUTOCONF) $(LOG_SRCS) $(LOG_SRC_DIRS)
 	@mkdir -p $(OUT_DIR)
 	@echo "[GEN ] $(WW_LOG_MAP)"
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP)
 	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --makefile > $(FILE_IDS_MK)
-	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $(AUTO_HEADER)
-	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --mapid  --write $(MAP_ID_H)
-	@$(PY) $(CONF2AUTOCONF) $(LOG_CONF) --write $(LOG_AUTOCONF)
 
 $(AUTO_HEADER): $(FILE_IDS_MK)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --header --write $@
+
+$(MAP_ID_H): $(FILE_IDS_MK)
+	@$(PY) $(GEN) $(LOG_CONFIG) --root $(CURDIR) --out $(WW_LOG_MAP) --mapid --write $@
+
+$(LOG_AUTOCONF): $(FILE_IDS_MK) $(LOG_CONF) $(CONF2AUTOCONF)
+	@$(PY) $(CONF2AUTOCONF) $(LOG_CONF) --write $@
 
 -include $(FILE_IDS_MK)
 
@@ -153,10 +156,10 @@ $(TARGET): $(OBJS)
 # __NOTDIR_FILE__ takes the generator's disambiguated short name, which equals
 # $(notdir $<) unless two sources share a basename (several target/*/main.c);
 # STR mode has no file_id to fall back on, so those must not print alike.
-$(OUT_DIR)/%.o: %.c $(AUTO_HEADER)
+$(OUT_DIR)/%.o: %.c $(AUTO_HEADER) $(LOG_AUTOCONF)
 	@mkdir -p $(dir $@)
 	@echo "[CC  ] $<"
-	$(eval V  := $(subst /,_,$(subst .,_,$<)))
+	$(eval V  := $(subst -,_,$(subst /,_,$(subst .,_,$<))))
 	$(eval FID := $(FILE_ID_$(V)))
 	$(eval MID := $(MODULE_ID_$(V)))
 	$(eval SEN := $(MODULE_STATIC_EN_$(V)))
@@ -174,6 +177,11 @@ $(OUT_DIR)/%.o: %.c $(AUTO_HEADER)
 			-D__NOTDIR_FILE__=\"$(SHORT)\" \
 			-MMD -MP -c $< -o $@; \
 	fi
+
+# These two translation units include the generated map identity directly.
+# State the dependency explicitly so a clean build creates it before their
+# first compile (there is no .d file yet on that first build).
+$(OUT_DIR)/log/n_ww_log_control.o $(OUT_DIR)/src/test/test_log.o: $(MAP_ID_H)
 
 -include $(OBJS:.o=.d)
 

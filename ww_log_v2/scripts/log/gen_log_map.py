@@ -98,6 +98,20 @@ def safe_var(path):
     return path.replace('/', '_').replace('.', '_').replace('-', '_')
 
 
+def validate_safe_vars(the_map):
+    """Reject distinct paths that collapse to the same Make/C identifier."""
+    seen = {}
+    for info in the_map.get('files', {}).values():
+        if not info.get('present', True):
+            continue
+        path = info['path']
+        var = safe_var(path)
+        if var in seen and seen[var] != path:
+            sys.exit("Error: source paths %r and %r both map to build key %r; "
+                     "rename one of them" % (seen[var], path, var))
+        seen[var] = path
+
+
 def basename(path):
     return norm(path).rsplit('/', 1)[-1]
 
@@ -530,6 +544,7 @@ def generate(config, old_map, root='.'):
 # ----------------------------------------------------------------------------
 
 def emit_makefile(config, the_map):
+    validate_safe_vars(the_map)
     modules = config.get('modules', {})
     mod_enabled = {info['id']: info.get('enable', True)
                    for info in modules.values()}
@@ -560,6 +575,7 @@ def emit_makefile(config, the_map):
 
 
 def emit_header(config, the_map):
+    validate_safe_vars(the_map)
     modules = config.get('modules', {})
     lines = [
         "/**",

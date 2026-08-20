@@ -21,9 +21,11 @@ extern "C"
 
 /*************************** macro definition start ***************************/
 
-#if defined(CONFIG_N_LOG_MODE_STRING)
+#if defined(CONFIG_N_LOG) && \
+    (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_STRING) && \
+    defined(CONFIG_N_LOG_BACKEND_UART)
 
-#ifndef _NOTDIR_FILE_
+#ifdef __NOTDIR_FILE__
 #define __WW_LOG_FILENAME__(path)    __NOTDIR_FILE__
 #else
 #define __WW_LOG_FILENAME__(path) \
@@ -45,32 +47,33 @@ extern "C"
 #define __WW_LOG_STR_STATIC_EXPAND(level, fmt, ...) \
     __WW_LOG_STR_IF(CURRENT_MODULE_STATIC_EN)(__WW_LOG_STR_CALL(level, fmt, ##__VA_ARGS__))
 
-#if (N_WW_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_ERR)
+#if (CONFIG_N_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_ERR)
 #define N_LOG_ERR(fmt, ...)    __WW_LOG_STR_STATIC_EXPAND(N_WW_LOG_LEVEL_ERR, fmt, ##__VA_ARGS__)
 #else
 #define N_LOG_ERR(fmt, ...)    do { } while (0)
 #endif
 
-#if (N_WW_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_WRN)
+#if (CONFIG_N_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_WRN)
 #define N_LOG_WRN(fmt, ...)    __WW_LOG_STR_STATIC_EXPAND(N_WW_LOG_LEVEL_WRN, fmt, ##__VA_ARGS__)
 #else
 #define N_LOG_WRN(fmt, ...)    do { } while (0)
 #endif
 
-#if (N_WW_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_INF)
+#if (CONFIG_N_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_INF)
 #define N_LOG_INF(fmt, ...)    __WW_LOG_STR_STATIC_EXPAND(N_WW_LOG_LEVEL_INF, fmt, ##__VA_ARGS__)
 #else
 #define N_LOG_INF(fmt, ...)    do { } while (0)
 #endif
 
-#if (N_WW_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_DBG)
+#if (CONFIG_N_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_DBG)
 #define N_LOG_DBG(fmt, ...)    __WW_LOG_STR_STATIC_EXPAND(N_WW_LOG_LEVEL_DBG, fmt, ##__VA_ARGS__)
 #else
 #define N_LOG_DBG(fmt, ...)    do { } while (0)
 #endif
 
 
-#elif defined(CONFIG_N_LOG_MODE_ENCODE)
+#elif defined(CONFIG_N_LOG) && \
+      (CONFIG_N_LOG_MODE == N_WW_LOG_MODE_ENCODE)
 
 /* Variadic argument counter (0-16) */
 #define __WW_LOG_ARG_COUNT(...) \
@@ -93,25 +96,25 @@ extern "C"
 #define __WW_LOG_STATIC_EXPAND(level, fmt, ...) \
     __WW_LOG_IF(CURRENT_MODULE_STATIC_EN)(__WW_LOG_ENCODE_CALL(level, fmt, ##__VA_ARGS__))
 
-#if (N_WW_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_ERR)
+#if (CONFIG_N_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_ERR)
 #define N_LOG_ERR(fmt, ...)    __WW_LOG_STATIC_EXPAND(N_WW_LOG_LEVEL_ERR, fmt, ##__VA_ARGS__)
 #else
 #define N_LOG_ERR(fmt, ...)    do { } while (0)
 #endif
 
-#if (N_WW_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_WRN)
+#if (CONFIG_N_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_WRN)
 #define N_LOG_WRN(fmt, ...)    __WW_LOG_STATIC_EXPAND(N_WW_LOG_LEVEL_WRN, fmt, ##__VA_ARGS__)
 #else
 #define N_LOG_WRN(fmt, ...)    do { } while (0)
 #endif
 
-#if (N_WW_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_INF)
+#if (CONFIG_N_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_INF)
 #define N_LOG_INF(fmt, ...)    __WW_LOG_STATIC_EXPAND(N_WW_LOG_LEVEL_INF, fmt, ##__VA_ARGS__)
 #else
 #define N_LOG_INF(fmt, ...)    do { } while (0)
 #endif
 
-#if (N_WW_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_DBG)
+#if (CONFIG_N_LOG_COMPILE_THRESHOLD >= N_WW_LOG_LEVEL_DBG)
 #define N_LOG_DBG(fmt, ...)    __WW_LOG_STATIC_EXPAND(N_WW_LOG_LEVEL_DBG, fmt, ##__VA_ARGS__)
 #else
 #define N_LOG_DBG(fmt, ...)    do { } while (0)
