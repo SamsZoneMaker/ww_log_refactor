@@ -134,7 +134,7 @@ extern "C"
 { \
     if(vExpression) \
     { \
-        N_LOG_ERR("-- line:%d rc:0x%x\r\n", __LINE__, rc); \
+        N_LOG_ERR("rc:0x%x\r\n", rc); \
         return rc; \
     } \
 }
@@ -143,7 +143,7 @@ extern "C"
 { \
     if(vExpression) \
     { \
-        N_LOG_ERR("-- line:%d rc:0x%x\r\n", __LINE__, rc); \
+        N_LOG_ERR("rc:0x%x\r\n", rc); \
         return; \
     } \
 }

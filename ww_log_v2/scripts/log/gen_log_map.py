@@ -30,6 +30,9 @@ Options:
                   script is write-if-changed, which is what keeps a source edit
                   (new line numbers, same file IDs) from touching file_ids.mk /
                   auto_file_ids.h and forcing a full rebuild.
+  --check-headers scan .h files for executable log calls and print warnings.
+                  Disabled by default; enable it during development checks or
+                  in the release/CI validation flow.
   --version-header <path>  with --archive: read BUILD_VERSION / BUILD_GIT_ID /
                   BUILD_TIME out of the project's generated version.h and stamp
                   them into the archived copy, so an archived map says which
@@ -59,14 +62,20 @@ LOG_CALL_RE = re.compile(r'\bN?_?LOG_(ERR|WRN|INF|DBG)\s*\(')
 # \s*\( below keeps e.g. N_RETURN_IF_TRUE_WO_PRINT( from matching the shorter
 # N_RETURN_IF_TRUE (the '_' after the name is a word char, so no '(' follows).
 HELPER_MACROS = {
-    'N_RETURN_CODE_IF_TRUE': ('ERR', r'-- line:%d rc:0x%x\r\n', 2),
-    'N_RETURN_IF_TRUE':      ('ERR', r'-- line:%d rc:0x%x\r\n', 2),
+    'N_RETURN_CODE_IF_TRUE': ('ERR', r'rc:0x%x\r\n', 1),
+    'N_RETURN_IF_TRUE':      ('ERR', r'rc:0x%x\r\n', 1),
     'N_BREAK_IF_TRUE':       ('ERR', r'rc:0x%x\r\n', 1),
     'N_CONTINUE_IF_TRUE':    ('ERR', r'rc:0x%x\r\n', 1),
     'N_PRINT_IF_TRUE':       ('ERR', r'rc:0x%x\r\n', 1),
 }
 HELPER_CALL_RE = re.compile(
     r'\b(' + '|'.join(sorted(HELPER_MACROS, key=len, reverse=True)) + r')\s*\(')
+
+# This header deliberately contains the N_LOG_* and helper macro definitions.
+# Those replacement lists are not call sites, so warning about them is noise.
+# Keep executable/static-inline logging out of this file because the optional
+# header check intentionally skips it as a whole.
+HEADER_LOG_SCAN_EXCLUDES = {'n_ww_log_macro.h'}
 
 
 # ----------------------------------------------------------------------------
@@ -414,6 +423,8 @@ def warn_header_logs(paths, root):
     map, so the honest answer is to flag it rather than emit wrong entries.
     """
     for path in sorted(paths):
+        if basename(path) in HEADER_LOG_SCAN_EXCLUDES:
+            continue
         try:
             with open(os.path.join(root, path), 'r', encoding='utf-8',
                       errors='replace') as f:
@@ -433,7 +444,7 @@ def warn_header_logs(paths, root):
 # generate (scan + merge with old map for file_id locking)
 # ----------------------------------------------------------------------------
 
-def generate(config, old_map, root='.'):
+def generate(config, old_map, root='.', check_headers=False):
     modules = config.get('modules', {})
     root = os.path.abspath(root)
     scanned = scan_c_files(modules, root)        # path -> module name (relative to root)
@@ -495,8 +506,11 @@ def generate(config, old_map, root='.'):
         print("Warning: %s not under any module dir -> logs disabled" % path,
               file=sys.stderr)
 
-    # Logs inside headers cannot be represented in this map -- flag them.
-    warn_header_logs(scan_files(modules, root, '.h'), root)
+    # Header scanning is diagnostic only and can be noisy/expensive in a normal
+    # build, so leave it off unless explicitly requested. Calls in .c files are
+    # always handled by the normal entry pass below and are unaffected.
+    if check_headers:
+        warn_header_logs(scan_files(modules, root, '.h'), root)
 
     # Display name: basename when unique, otherwise the shortest unique path
     # tail. Consumed by the decoder (readable output) and by the Makefile
@@ -727,7 +741,8 @@ def main():
 
     # default: scan + (re)generate map
     old_map = load_json(map_path)
-    new_map = generate(config, old_map, root)
+    new_map = generate(config, old_map, root,
+                       check_headers=("--check-headers" in flags))
 
     # Keep build_time from the old map when nothing else changed, so a rebuild
     # that found no source change does not churn the file (and its git diff).
